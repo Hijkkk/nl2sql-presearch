@@ -1,14 +1,9 @@
-"""
-Database session management for ORM-backed business tables.
-
-The NL2SQL demo data source is still handled by adapters. This module is only
-for application data such as users, tokens and user preferences.
-"""
-from collections.abc import Generator
+"""Async database session management for ORM-backed business tables."""
+from collections.abc import AsyncGenerator
 from urllib.parse import quote_plus
 
-from sqlalchemy import create_engine
-from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.orm import DeclarativeBase
 
 from backend.config.config import settings
 
@@ -28,34 +23,40 @@ def build_database_url() -> str:
     port = settings.mysql_port
     database = settings.mysql_database
     charset = settings.mysql_charset
-    return f"mysql+pymysql://{username}:{password}@{host}:{port}/{database}?charset={charset}"
+    return f"mysql+aiomysql://{username}:{password}@{host}:{port}/{database}?charset={charset}"
 
 
-engine = create_engine(
+async_engine = create_async_engine(
     build_database_url(),
+    echo=settings.sql_echo,
+    pool_size=settings.mysql_pool_size,
+    max_overflow=settings.mysql_max_overflow,
     pool_pre_ping=True,
     pool_recycle=3600,
-    future=True,
 )
 
-SessionLocal = sessionmaker(
-    bind=engine,
+AsyncSessionLocal = async_sessionmaker(
+    bind=async_engine,
+    class_=AsyncSession,
     autoflush=False,
-    autocommit=False,
     expire_on_commit=False,
-    class_=Session,
 )
 
 
-def init_db() -> None:
+async def init_db() -> None:
     """Create ORM tables if they do not exist."""
-    Base.metadata.create_all(bind=engine)
+    async with async_engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
 
 
-def get_db() -> Generator[Session, None, None]:
+async def get_db() -> AsyncGenerator[AsyncSession, None]:
     """FastAPI dependency that provides one database session per request."""
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+    async with AsyncSessionLocal() as session:
+        try:
+            yield session
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
+        finally:
+            await session.close()

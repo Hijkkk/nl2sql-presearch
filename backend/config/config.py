@@ -48,6 +48,20 @@ class Settings(BaseSettings):
     default_data_source: str = "sqlite_demo"
     sqlite_db_path: str = "./data/demo.db"
 
+    # ==================== 用户模块 MySQL 异步 ORM 配置 ====================
+    # 优先使用完整 SQLAlchemy URL；为空时使用下方 MYSQL_* 配置拼接。
+    # 示例：mysql+aiomysql://root:password@127.0.0.1:3306/news_app?charset=utf8mb4
+    user_database_url: str = Field(default="", alias="USER_DATABASE_URL")
+    mysql_host: str = Field(default="127.0.0.1", alias="MYSQL_HOST")
+    mysql_port: int = Field(default=3306, alias="MYSQL_PORT")
+    mysql_user: str = Field(default="root", alias="MYSQL_USER")
+    mysql_password: str = Field(default="", alias="MYSQL_PASSWORD")
+    mysql_database: str = Field(default="nl2sql_presearch", alias="MYSQL_DATABASE")
+    mysql_charset: str = Field(default="utf8mb4", alias="MYSQL_CHARSET")
+    mysql_pool_size: int = Field(default=10, alias="MYSQL_POOL_SIZE")
+    mysql_max_overflow: int = Field(default=20, alias="MYSQL_MAX_OVERFLOW")
+    sql_echo: bool = Field(default=False, alias="SQL_ECHO")
+
     # ==================== 安全与健壮性 ====================
     """
     这三个配置是 NL2SQL 系统的防护措施：

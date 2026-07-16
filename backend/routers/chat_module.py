@@ -1,11 +1,16 @@
 import time
 
-from fastapi import APIRouter,HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.crud import conversation as conversation_crud
 from backend.config.audit import log_audit
 from backend.config.config import settings
 from backend.adapters.registry import get_adapter
+from backend.database import get_db
 from backend.models.models import DataSourceInfo, MetadataResponse, ChatResponse, ChatRequest
+from backend.models.user import User
+from backend.routers.user import get_current_user
 from datetime import datetime
 from loguru import logger
 
@@ -47,7 +52,11 @@ async def get_metadata(data_source: str):
 
 
 @router.post("/chat", response_model=ChatResponse)
-async def chat(request: ChatRequest):
+async def chat(
+    request: ChatRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
     """
     核心接口：自然语言 → SQL → 安全校验 → 执行 → 返回结果
     支持 Self-Correction + 审计日志
@@ -55,6 +64,32 @@ async def chat(request: ChatRequest):
     start_time = time.time()
     adapter = get_adapter(request.data_source)
     dialect = adapter.get_dialect()
+
+    async def persist_response(response: ChatResponse) -> ChatResponse:
+        try:
+            conversation_id, message_id = await conversation_crud.save_chat_exchange(
+                db=db,
+                user_id=current_user.id,
+                conversation_id=request.conversation_id,
+                question=request.question,
+                data_source=request.data_source,
+                model_id=request.model_id,
+                model_config=request.model_config,
+                ai_content=response.llm_thought or response.insight or response.error or "",
+                sql=response.sql,
+                columns=response.columns,
+                results=response.results,
+                row_count=response.row_count,
+                execution_time=response.execution_time,
+                insight=response.insight,
+                success=response.success,
+                error=response.error,
+            )
+            response.conversation_id = conversation_id
+            response.message_id = message_id
+        except Exception as history_error:
+            logger.warning(f"Save conversation history failed: {history_error}")
+        return response
 
     try:
         # 1. 获取元数据
@@ -76,12 +111,12 @@ async def chat(request: ChatRequest):
                 error_message=gen_error,
                 execution_time=time.time() - start_time
             )
-            return ChatResponse(
+            return await persist_response(ChatResponse(
                 success=False,
                 question=request.question,
                 error=f"SQL生成失败: {gen_error}",
                 llm_thought=thought
-            )
+            ))
 
         # 3. 安全验证（核心！）
         is_safe, validation_error = QueryGuard.validate_read_only(sql, dialect)
@@ -97,13 +132,13 @@ async def chat(request: ChatRequest):
                 error_message=validation_error,
                 execution_time=time.time() - start_time
             )
-            return ChatResponse(
+            return await persist_response(ChatResponse(
                 success=False,
                 question=request.question,
                 sql=sql,
                 error=f"安全拦截: {validation_error}",
                 llm_thought=thought
-            )
+            ))
 
         # 4. 执行查询
         try:
@@ -128,7 +163,7 @@ async def chat(request: ChatRequest):
 
             insight = f"共返回 {row_count} 条记录。"
 
-            return ChatResponse(
+            return await persist_response(ChatResponse(
                 success=True,
                 question=request.question,
                 sql=safe_sql,
@@ -138,7 +173,7 @@ async def chat(request: ChatRequest):
                 execution_time=round(execution_time, 2),
                 llm_thought=thought,
                 insight=insight
-            )
+            ))
 
         except Exception as exec_error:
             logger.error(f"Execution error: {exec_error}")
@@ -163,7 +198,7 @@ async def chat(request: ChatRequest):
                                 status="success",
                                 execution_time=exec_time
                             )
-                            return ChatResponse(
+                            return await persist_response(ChatResponse(
                                 success=True,
                                 question=request.question,
                                 sql=corrected_sql,
@@ -174,7 +209,7 @@ async def chat(request: ChatRequest):
                                 llm_thought=thought + "\n[自修复] " + correction_thought,
                                 corrected_sql=corrected_sql,
                                 insight="已自动修复SQL并成功执行"
-                            )
+                            ))
                     except Exception:
                         pass
 
@@ -189,13 +224,13 @@ async def chat(request: ChatRequest):
                 execution_time=time.time() - start_time
             )
 
-            return ChatResponse(
+            return await persist_response(ChatResponse(
                 success=False,
                 question=request.question,
                 sql=sql,
                 error=f"查询执行失败: {str(exec_error)}",
                 llm_thought=thought
-            )
+            ))
 
     except Exception as e:
         logger.exception("Chat endpoint unexpected error")
@@ -209,11 +244,11 @@ async def chat(request: ChatRequest):
             error_message=str(e),
             execution_time=time.time() - start_time
         )
-        return ChatResponse(
+        return await persist_response(ChatResponse(
             success=False,
             question=request.question,
             error=f"系统异常: {str(e)}"
-        )
+        ))
 
 
 @router.get("/health")

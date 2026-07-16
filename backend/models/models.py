@@ -6,7 +6,7 @@ Pydantic 数据模型
     类型安全：IDE 有完整提示，代码更易维护。
     序列化方便：直接返回模型对象，FastAPI 会自动转 JSON。
 """
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 
@@ -25,9 +25,14 @@ from datetime import datetime
 
 class ChatRequest(BaseModel):
     """自然语言查询请求"""
+    model_config = ConfigDict(populate_by_name=True)
+
     question: str = Field(..., min_length=3, max_length=500, description="自然语言问题")
     data_source: str = Field(default="sqlite_demo", description="数据源名称")
     session_id: Optional[str] = None
+    conversation_id: Optional[str] = None
+    model_id: Optional[str] = None
+    model_conf: Optional[Dict[str, Any]] = Field(default=None, alias="model_config")
 
 """
 定义后端返回给前端的响应格式
@@ -47,6 +52,8 @@ class ChatResponse(BaseModel):
     """查询响应"""
     success: bool
     question: str
+    conversation_id: Optional[str] = None
+    message_id: Optional[str] = None
     sql: Optional[str] = None
     results: Optional[List[Dict[str, Any]]] = None
     columns: Optional[List[str]] = None

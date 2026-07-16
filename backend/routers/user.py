@@ -5,7 +5,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.crud import user as user_crud
 from backend.database import get_db
@@ -31,9 +31,9 @@ def _normalize_token(authorization: Optional[str]) -> str:
     return token
 
 
-def get_current_user(
+async def get_current_user(
     authorization: Optional[str] = Header(default=None, alias="Authorization"),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> User:
     token = _normalize_token(authorization)
     if not token:
@@ -42,7 +42,7 @@ def get_current_user(
             detail="未登录或缺少 Authorization",
         )
 
-    user = user_crud.get_user_by_token(db, token)
+    user = await user_crud.get_user_by_token(db, token)
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -60,26 +60,26 @@ def _auth_response(token: str, user: User, message: str) -> ApiResponse:
 
 
 @router.post("/register", response_model=ApiResponse)
-def register(payload: UserAuthRequest, db: Session = Depends(get_db)) -> ApiResponse:
+async def register(payload: UserAuthRequest, db: AsyncSession = Depends(get_db)) -> ApiResponse:
     """Register a new user and return a login token."""
     username = payload.username.strip()
-    if user_crud.get_user_by_username(db, username):
+    if await user_crud.get_user_by_username(db, username):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="用户名已存在")
 
     try:
-        user = user_crud.create_user(db, username=username, password=payload.password)
+        user = await user_crud.create_user(db, username=username, password=payload.password)
     except IntegrityError as exc:
-        db.rollback()
+        await db.rollback()
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="用户名已存在") from exc
 
-    token = user_crud.issue_access_token(db, user)
+    token = await user_crud.issue_access_token(db, user)
     return _auth_response(token, user, "注册成功")
 
 
 @router.post("/login", response_model=ApiResponse)
-def login(payload: UserAuthRequest, db: Session = Depends(get_db)) -> ApiResponse:
+async def login(payload: UserAuthRequest, db: AsyncSession = Depends(get_db)) -> ApiResponse:
     """Login with username and password."""
-    user = user_crud.authenticate_user(
+    user = await user_crud.authenticate_user(
         db,
         username=payload.username.strip(),
         password=payload.password,
@@ -90,12 +90,12 @@ def login(payload: UserAuthRequest, db: Session = Depends(get_db)) -> ApiRespons
             detail="用户名或密码错误",
         )
 
-    token = user_crud.issue_access_token(db, user)
+    token = await user_crud.issue_access_token(db, user)
     return _auth_response(token, user, "登录成功")
 
 
 @router.get("/info", response_model=ApiResponse)
-def get_user_info(current_user: User = Depends(get_current_user)) -> ApiResponse:
+async def get_user_info(current_user: User = Depends(get_current_user)) -> ApiResponse:
     """Return the current logged-in user."""
     return ApiResponse(
         code=200,
@@ -105,13 +105,13 @@ def get_user_info(current_user: User = Depends(get_current_user)) -> ApiResponse
 
 
 @v1_router.put("/model-config", response_model=ApiResponse)
-def save_model_config(
+async def save_model_config(
     payload: UserModelConfigUpdate,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> ApiResponse:
     """Persist the current user's default model configuration."""
-    config = user_crud.update_user_model_config(db, current_user, payload)
+    config = await user_crud.update_user_model_config(db, current_user, payload)
     return ApiResponse(
         code=200,
         message="保存成功",

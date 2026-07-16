@@ -8,7 +8,7 @@ import secrets
 from typing import Optional
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.models.user import (
     DEFAULT_AVATAR,
@@ -57,12 +57,12 @@ def verify_password(password: str, password_hash: str) -> bool:
         return False
 
 
-def get_user_by_username(db: Session, username: str) -> Optional[User]:
+async def get_user_by_username(db: AsyncSession, username: str) -> Optional[User]:
     stmt = select(User).where(User.username == username)
-    return db.scalar(stmt)
+    return await db.scalar(stmt)
 
 
-def create_user(db: Session, username: str, password: str) -> User:
+async def create_user(db: AsyncSession, username: str, password: str) -> User:
     user = User(
         username=username,
         password_hash=hash_password(password),
@@ -72,13 +72,13 @@ def create_user(db: Session, username: str, password: str) -> User:
         bio=DEFAULT_BIO,
     )
     db.add(user)
-    db.commit()
-    db.refresh(user)
+    await db.commit()
+    await db.refresh(user)
     return user
 
 
-def authenticate_user(db: Session, username: str, password: str) -> Optional[User]:
-    user = get_user_by_username(db, username)
+async def authenticate_user(db: AsyncSession, username: str, password: str) -> Optional[User]:
+    user = await get_user_by_username(db, username)
     if not user or not user.is_active:
         return None
     if not verify_password(password, user.password_hash):
@@ -86,24 +86,24 @@ def authenticate_user(db: Session, username: str, password: str) -> Optional[Use
     return user
 
 
-def issue_access_token(db: Session, user: User) -> str:
+async def issue_access_token(db: AsyncSession, user: User) -> str:
     """Create a frontend-compatible token and store only its hash."""
     token = secrets.token_urlsafe(32)
     user.token_hash = _hash_token(token)
     user.token_expires_at = datetime.utcnow() + timedelta(days=TOKEN_EXPIRE_DAYS)
     db.add(user)
-    db.commit()
-    db.refresh(user)
+    await db.commit()
+    await db.refresh(user)
     return token
 
 
-def get_user_by_token(db: Session, token: str) -> Optional[User]:
+async def get_user_by_token(db: AsyncSession, token: str) -> Optional[User]:
     token_hash = _hash_token(token)
     stmt = select(User).where(
         User.token_hash == token_hash,
         User.is_active.is_(True),
     )
-    user = db.scalar(stmt)
+    user = await db.scalar(stmt)
     if not user or not user.token_expires_at:
         return None
     if user.token_expires_at < datetime.utcnow():
@@ -123,8 +123,8 @@ def to_user_info(user: User) -> UserInfo:
     )
 
 
-def update_user_model_config(
-    db: Session,
+async def update_user_model_config(
+    db: AsyncSession,
     user: User,
     config: UserModelConfigUpdate,
 ) -> UserModelConfig:
@@ -135,8 +135,8 @@ def update_user_model_config(
     user.enable_sql_safety = config.enable_sql_safety
     user.return_insight = config.return_insight
     db.add(user)
-    db.commit()
-    db.refresh(user)
+    await db.commit()
+    await db.refresh(user)
     return to_model_config(user)
 
 
