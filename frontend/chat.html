@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NL2SQL 智能查询助手 · 7B模型预研版</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap');
+        
+        :root {
+            --primary: #6366f1;
+        }
+        
+        body {
+            font-family: 'Inter', system_ui, sans-serif;
+        }
+        
+        .font-mono {
+            font-family: 'JetBrains Mono', ui-monospace, monospace;
+        }
+
+        .chat-container {
+            scrollbar-width: thin;
+            scrollbar-color: #e5e7eb #f9fafb;
+        }
+
+        .message {
+            max-width: 85%;
+            animation: fadeInUp 0.3s ease forwards;
+        }
+
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .sql-block {
+            background: #0f172a;
+            color: #e0e7ff;
+            font-family: 'JetBrains Mono', monospace;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+
+        .result-table {
+            font-size: 0.875rem;
+            border-collapse: collapse;
+        }
+
+        .result-table th {
+            background: #f1e7ff;
+            color: #581c87;
+            font-weight: 600;
+            position: sticky;
+            top: 0;
+        }
+
+        .nav-active {
+            background-color: #6366f120;
+            color: #6366f1;
+            border-radius: 6px;
+        }
+
+        .metric-card {
+            transition: transform 0.2s ease;
+        }
+
+        .metric-card:hover {
+            transform: translateY(-2px);
+        }
+
+        .loading-dots::after {
+            content: '...';
+            animation: loading 1.2s infinite;
+        }
+    </style>
+</head>
+<body class="bg-slate-50">
+    <!-- Top Navigation -->
+    <nav class="bg-white border-b border-slate-200 sticky top-0 z-50">
+        <div class="max-w-screen-2xl mx-auto">
+            <div class="px-8 py-4 flex items-center justify-between">
+                <div class="flex items-center gap-x-3">
+                    <div class="w-10 h-10 bg-indigo-600 rounded-2xl flex items-center justify-center">
+                        <i class="fa-solid fa-robot text-white text-2xl"></i>
+                    </div>
+                    <div>
+                        <h1 class="text-2xl font-semibold tracking-tight text-slate-900">NL2SQL 智能查询</h1>
+                        <p class="text-xs text-slate-500 -mt-1">基于 Qwen2-7B · 多数据源预研版</p>
+                    </div>
+                </div>
+                
+                <div class="flex items-center gap-x-4">
+                    <!-- Data Source Selector -->
+                    <div class="flex items-center bg-slate-100 rounded-3xl p-1 text-sm">
+                        <div class="px-4 py-1.5 flex items-center gap-x-2 text-emerald-600">
+                            <i class="fa-solid fa-database"></i>
+                            <span class="font-medium">sqlite_demo</span>
+                        </div>
+                        <div class="px-3 py-1 text-xs bg-white shadow-sm rounded-3xl flex items-center gap-x-1.5">
+                            <div class="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></div>
+                            <span class="text-emerald-600 text-xs font-medium">已连接</span>
+                        </div>
+                    </div>
+                    
+                    <div class="flex items-center gap-x-2 text-sm">
+                        <div class="px-3 py-1 bg-white border border-slate-200 rounded-3xl text-xs flex items-center gap-x-2">
+                            <i class="fa-solid fa-microchip text-indigo-500"></i>
+                            <span class="font-mono text-slate-600">Qwen3-Coder-Next-FP8 (公司内部)</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <div class="max-w-screen-2xl mx-auto px-8 py-6">
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+            
+            <!-- Left Sidebar: Metadata -->
+            <div class="lg:col-span-3">
+                <div class="bg-white rounded-3xl shadow-sm border border-slate-200 p-5 sticky top-20">
+                    <div class="flex items-center justify-between mb-4">
+                        <h3 class="font-semibold text-lg flex items-center gap-x-2">
+                            <i class="fa-solid fa-table text-indigo-500"></i>
+                            <span>元数据概览</span>
+                        </h3>
+                        <button onclick="loadMetadata()" 
+                                class="text-xs px-3 py-1 bg-slate-100 hover:bg-slate-200 rounded-2xl flex items-center gap-x-1 transition-colors">
+                            <i class="fa-solid fa-sync text-xs"></i>
+                            <span>刷新</span>
+                        </button>
+                    </div>
+                    
+                    <div id="metadata-panel" class="space-y-3 text-sm">
+                        <!-- Populated by JS -->
+                        <div class="text-center py-8 text-slate-400">
+                            <i class="fa-solid fa-spinner fa-spin text-xl"></i>
+                            <p class="mt-2 text-xs">加载中...</p>
+                        </div>
+                    </div>
+                    
+                    <div class="mt-6 pt-4 border-t border-slate-100">
+                        <div class="text-xs text-slate-500 mb-2">支持的高级能力</div>
+                        <div class="flex flex-wrap gap-1.5">
+                            <span class="px-2.5 py-0.5 bg-indigo-50 text-indigo-600 text-[10px] rounded-2xl">多表 JOIN</span>
+                            <span class="px-2.5 py-0.5 bg-indigo-50 text-indigo-600 text-[10px] rounded-2xl">子查询</span>
+                            <span class="px-2.5 py-0.5 bg-indigo-50 text-indigo-600 text-[10px] rounded-2xl">GROUP BY</span>
+                            <span class="px-2.5 py-0.5 bg-indigo-50 text-indigo-600 text-[10px] rounded-2xl">窗口函数</span>
+                            <span class="px-2.5 py-0.5 bg-indigo-50 text-indigo-600 text-[10px] rounded-2xl">递归CTE</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Main Chat Area -->
+            <div class="lg:col-span-6">
+                <div class="bg-white rounded-3xl shadow-sm border border-slate-200 flex flex-col h-[calc(100vh-120px)] min-h-[620px]">
+                    
+                    <!-- Chat Header -->
+                    <div class="px-6 py-4 border-b flex items-center justify-between">
+                        <div>
+                            <h2 class="font-semibold">自然语言查询对话</h2>
+                            <p class="text-xs text-slate-500">输入问题 → 自动生成SQL → 执行并展示结果</p>
+                        </div>
+                        <button onclick="clearChat()" 
+                                class="text-xs flex items-center gap-x-1.5 px-4 py-2 text-slate-500 hover:text-red-500 transition-colors">
+                            <i class="fa-solid fa-trash-can"></i>
+                            <span>清空对话</span>
+                        </button>
+                    </div>
+
+                    <!-- Messages -->
+                    <div id="chat-messages" 
+                         class="flex-1 p-6 overflow-y-auto chat-container space-y-6 bg-slate-50/60">
+                        <!-- Welcome message -->
+                        <div class="flex gap-x-3">
+                            <div class="w-8 h-8 bg-indigo-600 text-white rounded-2xl flex-shrink-0 flex items-center justify-center text-sm font-bold">AI</div>
+                            <div class="message bg-white border border-slate-200 p-4 rounded-3xl rounded-tl-none max-w-[80%]">
+                                <p class="text-sm">你好！我是基于 <strong>Qwen3-Coder-Next-FP8</strong> 的智能查询助手（当前测试模型）。</p>
+                                <p class="text-xs mt-2 text-slate-500">我可以帮你用自然语言查询演示数据库（employees、departments、sales）。</p>
+                                <div class="mt-3 text-xs">
+                                    <span class="font-medium text-indigo-600">试试问我：</span><br>
+                                    <span class="inline-block mt-1 px-2.5 py-1 bg-slate-100 rounded-2xl cursor-pointer hover:bg-indigo-50" 
+                                          onclick="useExample(this)">技术部薪资高于平均的员工有哪些？</span><br>
+                                    <span class="inline-block mt-1 px-2.5 py-1 bg-slate-100 rounded-2xl cursor-pointer hover:bg-indigo-50" 
+                                          onclick="useExample(this)">每个部门的销售总额是多少？只显示超过10万的</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Input Area -->
+                    <div class="p-4 border-t bg-white rounded-b-3xl">
+                        <div class="flex gap-x-3">
+                            <div class="flex-1 relative">
+                                <input id="question-input" type="text" 
+                                       class="w-full border border-slate-300 focus:border-indigo-400 transition-colors rounded-3xl px-5 py-3.5 text-sm placeholder:text-slate-400 outline-none"
+                                       placeholder="例如：统计每个部门的平均薪资和销售总额..."
+                                       onkeypress="if(event.key === 'Enter') sendQuestion()">
+                                <div class="absolute right-4 top-4 text-xs text-slate-400">按Enter发送</div>
+                            </div>
+                            <button onclick="sendQuestion()" 
+                                    class="px-8 bg-indigo-600 hover:bg-indigo-700 transition-all active:scale-[0.985] text-white rounded-3xl flex items-center justify-center gap-x-2 font-medium shadow-sm">
+                                <span>发送</span>
+                                <i class="fa-solid fa-paper-plane"></i>
+                            </button>
+                        </div>
+                        <div class="text-[10px] text-center text-slate-400 mt-2">仅支持只读查询 • 已启用SQL安全校验 • 7B模型本地推理</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Right Panel: SQL + Result -->
+            <div class="lg:col-span-3 space-y-4">
+                <!-- Current SQL -->
+                <div class="bg-white rounded-3xl shadow-sm border border-slate-200 p-5">
+                    <div class="flex items-center justify-between mb-3">
+                        <div class="font-semibold flex items-center gap-x-2 text-sm">
+                            <i class="fa-solid fa-code text-emerald-500"></i>
+                            <span>生成的SQL</span>
+                        </div>
+                        <button onclick="copySQL()" class="text-xs px-2.5 py-1 hover:bg-slate-100 rounded-xl flex items-center gap-x-1 text-slate-500">
+                            <i class="fa-solid fa-copy"></i>
+                        </button>
+                    </div>
+                    <div id="sql-display" 
+                         class="sql-block text-xs p-4 rounded-2xl min-h-[120px] max-h-[220px] overflow-auto font-mono border border-slate-800">
+                        <span class="text-slate-400">等待查询...</span>
+                    </div>
+                </div>
+
+                <!-- Execution Info -->
+                <div class="bg-white rounded-3xl shadow-sm border border-slate-200 p-5 text-sm">
+                    <div class="font-semibold mb-3 flex items-center gap-x-2">
+                        <i class="fa-solid fa-info-circle text-amber-500"></i>
+                        <span>执行信息</span>
+                    </div>
+                    <div id="execution-info" class="space-y-2 text-xs">
+                        <div class="flex justify-between"><span class="text-slate-500">状态</span> <span id="exec-status" class="font-mono text-emerald-600">就绪</span></div>
+                        <div class="flex justify-between"><span class="text-slate-500">耗时</span> <span id="exec-time" class="font-mono">-</span></div>
+                        <div class="flex justify-between"><span class="text-slate-500">返回行数</span> <span id="exec-rows" class="font-mono">-</span></div>
+                    </div>
+                </div>
+
+                <!-- Quick Actions -->
+                <div class="bg-white rounded-3xl shadow-sm border border-slate-200 p-5">
+                    <div class="text-xs font-semibold mb-3 text-slate-600">快速测试场景</div>
+                    <div class="space-y-2 text-xs">
+                        <button onclick="quickTest(1)" class="w-full text-left px-3 py-2 hover:bg-slate-50 rounded-2xl flex items-center gap-x-2 text-slate-600">
+                            <i class="fa-solid fa-users w-4"></i> <span>部门销售统计（复杂）</span>
+                        </button>
+                        <button onclick="quickTest(2)" class="w-full text-left px-3 py-2 hover:bg-slate-50 rounded-2xl flex items-center gap-x-2 text-slate-600">
+                            <i class="fa-solid fa-chart-line w-4"></i> <span>薪资高于平均的员工</span>
+                        </button>
+                        <button onclick="quickTest(3)" class="w-full text-left px-3 py-2 hover:bg-slate-50 rounded-2xl flex items-center gap-x-2 text-slate-600">
+                            <i class="fa-solid fa-ranking-star w-4"></i> <span>部门薪资Top 2</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+            
+        </div>
+    </div>
+
+    <script>
+        // Tailwind script
+        function initializeTailwind() {
+            document.documentElement.style.setProperty('--accent', '#6366f1');
+        }
+
+        // API 基础地址 - 根据你的后端端口修改（默认8000）
+        const API_BASE = 'http://localhost:8000';
+
+        let currentSQL = '';
+
+        async function loadMetadata() {
+            const panel = document.getElementById('metadata-panel');
+            panel.innerHTML = `<div class="text-center py-4"><i class="fa-solid fa-spinner fa-spin"></i><p class="text-xs mt-1">加载元数据...</p></div>`;
+            
+            try {
+                const res = await fetch(`${API_BASE}/api/v1/metadata/sqlite_demo`);
+                const data = await res.json();
+                
+                let html = '';
+                data.tables.forEach(table => {
+                    html += `
+                        <div class="border border-slate-100 rounded-2xl p-3">
+                            <div class="flex items-center justify-between">
+                                <div class="font-semibold text-sm flex items-center gap-x-2">
+                                    <i class="fa-solid fa-table text-indigo-400"></i>
+                                    <span>${table.name}</span>
+                                </div>
+                                <span class="text-[10px] px-2 py-0.5 bg-slate-100 rounded-xl">${table.columns.length} 列</span>
+                            </div>
+                            <div class="text-xs text-slate-500 mt-1">${table.comment || ''}</div>
+                            
+                            <div class="mt-2 text-[10px] grid grid-cols-2 gap-x-2 gap-y-0.5 text-slate-600">
+                                ${table.columns.slice(0, 5).map(c => `
+                                    <div class="flex items-center gap-x-1 truncate">
+                                        <span class="font-mono text-indigo-500">${c.name}</span>
+                                    </div>
+                                `).join('')}
+                                ${table.columns.length > 5 ? `<div class="text-slate-400">+${table.columns.length - 5} 更多...</div>` : ''}
+                            </div>
+                        </div>
+                    `;
+                });
+                panel.innerHTML = html;
+            } catch (e) {
+                panel.innerHTML = `<div class="text-red-500 text-xs p-3">加载失败: ${e.message}</div>`;
+            }
+        }
+
+        function addMessage(role, content, extra = {}) {
+            const container = document.getElementById('chat-messages');
+            const isUser = role === 'user';
+            
+            const msgDiv = document.createElement('div');
+            msgDiv.className = `flex gap-x-3 ${isUser ? 'justify-end' : ''}`;
+            
+            let innerHTML = '';
+            
+            if (isUser) {
+                innerHTML = `
+                    <div class="message bg-indigo-600 text-white p-4 rounded-3xl rounded-tr-none max-w-[75%]">
+                        <p class="text-sm">${content}</p>
+                    </div>
+                    <div class="w-8 h-8 bg-slate-300 text-slate-600 rounded-2xl flex-shrink-0 flex items-center justify-center text-sm font-bold">你</div>
+                `;
+            } else {
+                let resultHTML = '';
+                if (extra.results && extra.results.length > 0) {
+                    resultHTML = `
+                        <div class="mt-4">
+                            <div class="text-xs font-medium mb-2 flex items-center gap-x-2 text-emerald-600">
+                                <i class="fa-solid fa-check-circle"></i> 
+                                <span>查询成功 · ${extra.row_count} 条记录</span>
+                            </div>
+                            <div class="overflow-x-auto max-h-[280px] border border-slate-200 rounded-2xl">
+                                <table class="result-table w-full text-xs">
+                                    <thead>
+                                        <tr>
+                                            ${extra.columns.map(col => `<th class="px-3 py-2 text-left font-semibold">${col}</th>`).join('')}
+                                        </tr>
+                                    </thead>
+                                    <tbody class="divide-y divide-slate-100">
+                                        ${extra.results.slice(0, 12).map(row => `
+                                            <tr class="hover:bg-slate-50">
+                                                ${extra.columns.map(col => `<td class="px-3 py-2 font-mono text-slate-600">${row[col] ?? ''}</td>`).join('')}
+                                            </tr>
+                                        `).join('')}
+                                    </tbody>
+                                </table>
+                            </div>
+                            ${extra.results.length > 12 ? `<div class="text-center text-[10px] text-slate-400 mt-1">仅展示前12条 · 共 ${extra.row_count} 条</div>` : ''}
+                        </div>
+                    `;
+                }
+                
+                innerHTML = `
+                    <div class="w-8 h-8 bg-indigo-600 text-white rounded-2xl flex-shrink-0 flex items-center justify-center text-sm font-bold">AI</div>
+                    <div class="message bg-white border border-slate-200 p-4 rounded-3xl rounded-tl-none max-w-[82%]">
+                        <div class="prose prose-sm max-w-none text-sm">${content}</div>
+                        
+                        ${extra.sql ? `
+                            <div class="mt-4">
+                                <div class="flex items-center justify-between text-xs mb-1 px-1">
+                                    <span class="font-medium text-emerald-600 flex items-center gap-x-1">
+                                        <i class="fa-solid fa-database"></i> <span>执行SQL</span>
+                                    </span>
+                                    <button onclick="copyToClipboard(this)" class="text-emerald-500 hover:text-emerald-600">
+                                        <i class="fa-solid fa-copy text-xs"></i>
+                                    </button>
+                                </div>
+                                <div class="sql-block text-[10px] p-3 rounded-2xl overflow-auto max-h-[160px]">${extra.sql}</div>
+                            </div>
+                        ` : ''}
+                        
+                        ${resultHTML}
+                        
+                        ${extra.insight ? `<div class="mt-3 text-xs bg-amber-50 border border-amber-100 p-2.5 rounded-2xl text-amber-700">${extra.insight}</div>` : ''}
+                    </div>
+                `;
+            }
+            
+            msgDiv.innerHTML = innerHTML;
+            container.appendChild(msgDiv);
+            container.scrollTop = container.scrollHeight;
+            
+            return msgDiv;
+        }
+
+        async function sendQuestion(customQuestion = null) {
+            const input = document.getElementById('question-input');
+            const question = customQuestion || input.value.trim();
+            
+            if (!question) return;
+            
+            // Add user message
+            addMessage('user', question);
+            input.value = '';
+            
+            // Add loading AI message
+            const loadingMsg = addMessage('ai', `<span class="loading-dots">正在思考并生成SQL</span>`);
+            
+            try {
+                const res = await fetch(`${API_BASE}/api/v1/chat`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        question: question,
+                        data_source: 'sqlite_demo'
+                    })
+                });
+                
+                const data = await res.json();
+                
+                // Remove loading
+                loadingMsg.remove();
+                
+                if (data.success) {
+                    // Update right panel
+                    document.getElementById('sql-display').innerHTML = `<code class="text-emerald-400">${data.sql || ''}</code>`;
+                    currentSQL = data.sql || '';
+                    
+                    document.getElementById('exec-status').innerHTML = `<span class="text-emerald-600">成功</span>`;
+                    document.getElementById('exec-time').innerHTML = `${data.execution_time || 0}s`;
+                    document.getElementById('exec-rows').innerHTML = data.row_count || 0;
+                    
+                    // Add AI response with results
+                    addMessage('ai', data.llm_thought || '已生成并执行查询', {
+                        sql: data.sql,
+                        results: data.results,
+                        columns: data.columns,
+                        row_count: data.row_count,
+                        insight: data.insight
+                    });
+                } else {
+                    document.getElementById('sql-display').innerHTML = `<span class="text-red-400">${data.sql || ''}</span>`;
+                    addMessage('ai', `❌ ${data.error || '查询失败'}`, { sql: data.sql });
+                    
+                    document.getElementById('exec-status').innerHTML = `<span class="text-red-500">失败</span>`;
+                }
+            } catch (err) {
+                loadingMsg.remove();
+                addMessage('ai', `系统错误: ${err.message}`);
+                console.error(err);
+            }
+        }
+
+        function useExample(element) {
+            const text = element.textContent.trim();
+            document.getElementById('question-input').value = text;
+            sendQuestion(text);
+        }
+
+        function quickTest(type) {
+            let question = '';
+            if (type === 1) {
+                question = '统计每个部门的销售总额，只显示总额超过10万的部门，按总额降序排列';
+            } else if (type === 2) {
+                question = '找出技术部中薪资高于部门平均薪资的员工姓名和薪资';
+            } else if (type === 3) {
+                question = '找出每个部门薪资排名前2的员工姓名和薪资';
+            }
+            document.getElementById('question-input').value = question;
+            sendQuestion(question);
+        }
+
+        function copySQL() {
+            if (!currentSQL) {
+                alert('当前没有可复制的SQL');
+                return;
+            }
+            navigator.clipboard.writeText(currentSQL).then(() => {
+                const btns = document.querySelectorAll('#sql-display + button, button[onclick*="copySQL"]');
+                const originalText = event.target ? event.target.innerHTML : '';
+                // simple feedback
+                const orig = document.getElementById('sql-display').style.borderColor;
+                document.getElementById('sql-display').style.borderColor = '#10b981';
+                setTimeout(() => {
+                    document.getElementById('sql-display').style.borderColor = orig || '#334155';
+                }, 1200);
+            });
+        }
+
+        function copyToClipboard(element) {
+            const codeBlock = element.closest('.mt-4').querySelector('.sql-block');
+            if (codeBlock) {
+                navigator.clipboard.writeText(codeBlock.textContent.trim());
+                const origIcon = element.innerHTML;
+                element.innerHTML = '<i class="fa-solid fa-check text-emerald-500"></i>';
+                setTimeout(() => element.innerHTML = origIcon, 1500);
+            }
+        }
+
+        function clearChat() {
+            if (confirm('确定要清空当前对话吗？')) {
+                const container = document.getElementById('chat-messages');
+                container.innerHTML = `
+                    <div class="flex gap-x-3">
+                        <div class="w-8 h-8 bg-indigo-600 text-white rounded-2xl flex-shrink-0 flex items-center justify-center text-sm font-bold">AI</div>
+                        <div class="message bg-white border border-slate-200 p-4 rounded-3xl rounded-tl-none max-w-[80%]">
+                            <p class="text-sm">对话已清空。我随时准备回答新的问题！</p>
+                        </div>
+                    </div>
+                `;
+                document.getElementById('sql-display').innerHTML = '<span class="text-slate-400">等待查询...</span>';
+                currentSQL = '';
+            }
+        }
+
+        // Initialize
+        function init() {
+            initializeTailwind();
+            loadMetadata();
+            
+            // Welcome tip
+            setTimeout(() => {
+                const input = document.getElementById('question-input');
+                if (input) input.focus();
+            }, 800);
+            
+            // Keyboard hint
+            console.log('%c[NL2SQL] 前端初始化完成 - 7B模型预研版', 'color:#64748b');
+        }
+
+        window.onload = init;
+    </script>
+</body>
+</html>
