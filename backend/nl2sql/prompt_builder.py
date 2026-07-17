@@ -90,14 +90,34 @@ ORDER BY 销售总额 DESC;
 问题：找出每个部门薪资排名前2的员工
 ```sql
 SELECT 
-    d.name AS 部门,
-    e.name AS 员工,
-    e.salary,
-    RANK() OVER (PARTITION BY d.id ORDER BY e.salary DESC) AS 薪资排名
-FROM employees e
-JOIN departments d ON e.department_id = d.id
-WHERE 薪资排名 <= 2
-ORDER BY d.name, 薪资排名;
+    ranked.部门,
+    ranked.员工,
+    ranked.salary,
+    ranked.薪资排名
+FROM (
+    SELECT 
+        d.name AS 部门,
+        e.name AS 员工,
+        e.salary,
+        RANK() OVER (PARTITION BY d.id ORDER BY e.salary DESC) AS 薪资排名
+    FROM employees e
+    JOIN departments d ON e.department_id = d.id
+) ranked
+WHERE ranked.薪资排名 <= 2
+ORDER BY ranked.部门, ranked.薪资排名;
+```
+
+## 示例4：模糊匹配
+问题：查询名称里包含“技术”的部门
+思考：
+1. 需要查询 departments 表
+2. 用户说“包含”属于模糊匹配，应使用 LIKE
+3. 只返回必要字段
+```sql
+SELECT id, name, location
+FROM departments
+WHERE name LIKE '%技术%'
+ORDER BY id;
 ```
 
 现在，请严格按照以上风格和规则，处理用户问题。
@@ -182,7 +202,8 @@ ORDER BY d.name, 薪资排名;
 
         lines = []
         for table in tables:
-            lines.append(f"### 表: {table['name']} ({table.get('comment', '')})")
+            table_comment = table.get("summary") or table.get("comment", "")
+            lines.append(f"### 表: {table['name']} ({table_comment})")
             lines.append("CREATE TABLE " + table['name'] + " (")
             # "columns": [
             # {"name": "id", "type": "INTEGER", "comment": "主键"},

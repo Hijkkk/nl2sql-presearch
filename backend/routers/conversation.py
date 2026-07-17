@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.crud import conversation as conversation_crud
-from backend.database import get_db
+from backend.config.database import get_db
 from backend.models.conversation import ConversationCreate
 from backend.models.user import ApiResponse, User
 from backend.routers.user import get_current_user

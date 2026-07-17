@@ -3,6 +3,7 @@
 整合 NL2SQL + 多数据源 + 安全 + 审计
 """
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
@@ -11,7 +12,7 @@ from loguru import logger
 from backend.adapters.registry import get_adapter
 from backend.config.config import settings
 from backend.config.audit import init_audit_db
-from backend.database import async_engine, init_db
+from backend.config.database import async_engine, init_db
 from .routers import chat_module, user, conversation
 
 """
@@ -71,6 +72,31 @@ async def http_exception_handler(request: Request, exc: HTTPException):
             "data": None,
         },
     )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """Return readable validation errors for frontend forms."""
+    messages = []
+    for error in exc.errors():
+        field = error.get("loc", [""])[-1]
+        error_type = error.get("type")
+        if field == "password" and error_type == "string_too_short":
+            messages.append("密码至少需要 6 位")
+        elif field:
+            messages.append(f"{field}: {error.get('msg', '参数错误')}")
+        else:
+            messages.append(error.get("msg", "参数错误"))
+
+    return JSONResponse(
+        status_code=422,
+        content={
+            "code": 422,
+            "message": "；".join(messages) or "请求参数错误",
+            "data": None,
+        },
+    )
+
 
 @app.get("/")
 async def root():

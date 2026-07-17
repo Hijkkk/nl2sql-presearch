@@ -50,17 +50,29 @@ class Settings(BaseSettings):
 
     # ==================== 用户模块 MySQL 异步 ORM 配置 ====================
     # 优先使用完整 SQLAlchemy URL；为空时使用下方 MYSQL_* 配置拼接。
-    # 示例：mysql+aiomysql://root:password@127.0.0.1:3306/news_app?charset=utf8mb4
+    # 示例：mysql+aiomysql://root:1234@localhost:3306/nl2sql?charset=utf8mb4
     user_database_url: str = Field(default="", alias="USER_DATABASE_URL")
     mysql_host: str = Field(default="127.0.0.1", alias="MYSQL_HOST")
     mysql_port: int = Field(default=3306, alias="MYSQL_PORT")
     mysql_user: str = Field(default="root", alias="MYSQL_USER")
     mysql_password: str = Field(default="", alias="MYSQL_PASSWORD")
-    mysql_database: str = Field(default="nl2sql_presearch", alias="MYSQL_DATABASE")
+    mysql_database: str = Field(default="nl2sql", alias="MYSQL_DATABASE")
     mysql_charset: str = Field(default="utf8mb4", alias="MYSQL_CHARSET")
     mysql_pool_size: int = Field(default=10, alias="MYSQL_POOL_SIZE")
     mysql_max_overflow: int = Field(default=20, alias="MYSQL_MAX_OVERFLOW")
     sql_echo: bool = Field(default=False, alias="SQL_ECHO")
+
+    # ==================== NL2SQL 业务查询 MySQL 数据源配置 ====================
+    # 注意：这里是用户自然语言查询要访问的业务库，不保存用户、历史会话等系统数据。
+    mysql_query_enabled: bool = Field(default=True, alias="MYSQL_QUERY_ENABLED")
+    mysql_query_name: str = Field(default="mysql_local", alias="MYSQL_QUERY_NAME")
+    mysql_query_host: str = Field(default="127.0.0.1", alias="MYSQL_QUERY_HOST")
+    mysql_query_port: int = Field(default=3306, alias="MYSQL_QUERY_PORT")
+    mysql_query_user: str = Field(default="root", alias="MYSQL_QUERY_USER")
+    mysql_query_password: str = Field(default="", alias="MYSQL_QUERY_PASSWORD")
+    mysql_query_database: str = Field(default="", alias="MYSQL_QUERY_DATABASE")
+    mysql_query_charset: str = Field(default="utf8mb4", alias="MYSQL_QUERY_CHARSET")
+    mysql_query_description: str = Field(default="本地 MySQL 业务数据库", alias="MYSQL_QUERY_DESCRIPTION")
 
     # ==================== 安全与健壮性 ====================
     """

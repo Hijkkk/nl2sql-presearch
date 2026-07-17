@@ -6,8 +6,23 @@
 from typing import Dict, List, Any
 import re
 from loguru import logger
-#  Python 最流行的中文分词工具，能把一句中文拆成有意义的词语
-import jieba
+
+try:
+    # Python 最流行的中文分词工具，能把一句中文拆成有意义的词语。
+    import jieba
+except ImportError:  # pragma: no cover - 兼容未安装 jieba 的最小运行环境
+    jieba = None
+
+
+def tokenize_question(question: str) -> List[str]:
+    """将问题拆成可用于匹配的关键词，jieba 不可用时使用保守降级策略。"""
+    question = question.lower()
+    if jieba:
+        return [word for word in jieba.lcut(question) if len(word) > 1]
+
+    ascii_words = re.findall(r"[a-zA-Z0-9_]+", question)
+    chinese_chunks = re.findall(r"[\u4e00-\u9fff]{2,}", question)
+    return ascii_words + chinese_chunks
 
 
 def select_relevant_tables(
@@ -52,7 +67,7 @@ def select_relevant_tables(
                 score += 3
 
         # 把问题拆成有意义的词 长度大于一的词
-        words = [w for w in jieba.lcut(question_lower) if len(w) > 1]
+        words = tokenize_question(question_lower)
         # "技术部薪资高于平均的员工有哪些？"
         # → ["技术部", "薪资", "高于", "平均", "的", "员工", "有哪些"]
 

@@ -5,10 +5,10 @@ from datetime import datetime
 from typing import Any, Optional
 
 from pydantic import BaseModel, Field
-from sqlalchemy import Boolean, DateTime, Float, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, Float, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
-from backend.database import Base
+from backend.config.database import Base
 
 
 DEFAULT_AVATAR = "https://fastly.jsdelivr.net/npm/@vant/assets/cat.jpeg"

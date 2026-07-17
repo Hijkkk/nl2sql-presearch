@@ -8,6 +8,7 @@ from typing import Dict, Any, Optional, Tuple
 from loguru import logger
 from backend.config.config import settings
 from backend.nl2sql.prompt_builder import PromptBuilder
+from backend.nl2sql.table_selector import select_relevant_tables
 
 
 class SQLGenerator:
@@ -25,8 +26,14 @@ class SQLGenerator:
         生成 SQL
         返回: (sql, thought, error)
         """
-        # 1. 构建 Prompt（当前 MVP 使用全量 schema，后续可做表相关性选择）
-        prompt = self.prompt_builder.build_prompt(question, metadata)
+        # 1. 先做表相关性选择，避免复杂 schema 全量塞进 Prompt。
+        #    如果规则匹配不到，select_relevant_tables 会自动退回前 max_tables 张表。
+        relevant_tables = select_relevant_tables(question, metadata)
+        prompt = self.prompt_builder.build_prompt(
+            question,
+            metadata,
+            relevant_tables=relevant_tables,
+        )
 
         try:
             # 调用 OpenAI 兼容接口（LiteLLM / DashScope 都支持）

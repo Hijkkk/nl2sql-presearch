@@ -5,6 +5,7 @@
 from fastapi import HTTPException
 from backend.config.config import settings
 from .sqlite_adapter import SQLiteAdapter
+from .mysql_adapter import MySQLAdapter
 from .base import BaseDataSourceAdapter
 
 # 全局适配器注册表
@@ -35,6 +36,26 @@ def get_adapter(data_source: str) -> BaseDataSourceAdapter:
             ADAPTERS[data_source] = SQLiteAdapter(
                 name="sqlite_demo",
                 db_path=settings.sqlite_db_path
+            )
+        elif data_source == settings.mysql_query_name:
+            if not settings.mysql_query_enabled:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"MySQL 数据源 {data_source} 未启用"
+                )
+            if not settings.mysql_query_database:
+                raise HTTPException(
+                    status_code=404,
+                    detail="MySQL 查询数据源未配置 MYSQL_QUERY_DATABASE"
+                )
+            ADAPTERS[data_source] = MySQLAdapter(
+                name=settings.mysql_query_name,
+                host=settings.mysql_query_host,
+                port=settings.mysql_query_port,
+                user=settings.mysql_query_user,
+                password=settings.mysql_query_password,
+                database=settings.mysql_query_database,
+                charset=settings.mysql_query_charset,
             )
         else:
             raise HTTPException(

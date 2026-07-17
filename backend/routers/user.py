@@ -8,7 +8,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.crud import user as user_crud
-from backend.database import get_db
+from backend.config.database import get_db
 from backend.models.user import (
     ApiResponse,
     AuthData,

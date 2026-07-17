@@ -7,7 +7,7 @@ from backend.crud import conversation as conversation_crud
 from backend.config.audit import log_audit
 from backend.config.config import settings
 from backend.adapters.registry import get_adapter
-from backend.database import get_db
+from backend.config.database import get_db
 from backend.models.models import DataSourceInfo, MetadataResponse, ChatResponse, ChatRequest
 from backend.models.user import User
 from backend.routers.user import get_current_user
@@ -24,7 +24,7 @@ sql_generator = SQLGenerator()
 @router.get("/data-sources", response_model=list[DataSourceInfo])
 async def list_data_sources():
     """列出支持的数据源"""
-    return [
+    sources = [
         DataSourceInfo(
             name="sqlite_demo",
             type="sqlite",
@@ -32,6 +32,27 @@ async def list_data_sources():
             description="内置演示数据库（employees, departments, sales）- 适合测试复杂查询"
         )
     ]
+    if settings.mysql_query_enabled:
+        status = "connected"
+        description = settings.mysql_query_description
+        try:
+            adapter = get_adapter(settings.mysql_query_name)
+            if hasattr(adapter, "ping"):
+                adapter.ping()
+        except Exception as exc:
+            status = "error"
+            description = f"MySQL 连接失败：{exc}"
+
+        sources.append(
+            DataSourceInfo(
+                name=settings.mysql_query_name,
+                type="mysql",
+                status=status,
+                description=description,
+            )
+        )
+
+    return sources
 
 
 @router.get("/metadata/{data_source}", response_model=MetadataResponse)
@@ -74,7 +95,7 @@ async def chat(
                 question=request.question,
                 data_source=request.data_source,
                 model_id=request.model_id,
-                model_config=request.model_config,
+                model_config=request.model_conf,
                 ai_content=response.llm_thought or response.insight or response.error or "",
                 sql=response.sql,
                 columns=response.columns,
