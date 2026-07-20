@@ -24,6 +24,10 @@ TOKEN_EXPIRE_DAYS = 7
 
 
 def _hash_token(token: str) -> str:
+    # _hash_token 的作用
+    # 这个函数用 SHA-256 算法对 token 字符串进行哈希（摘要）计算，
+    # 把任意长度的 token 转换成一个固定长度的 64 位十六进制字符串。
+    # 数据库被泄露
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
@@ -98,14 +102,20 @@ async def issue_access_token(db: AsyncSession, user: User) -> str:
 
 
 async def get_user_by_token(db: AsyncSession, token: str) -> Optional[User]:
+    # is_active 是用户表中的一个布尔字段，表示该用户账号是否处于激活/启用状态
     token_hash = _hash_token(token)
     stmt = select(User).where(
         User.token_hash == token_hash,
+        # is_active 字段用于判断用户账号是否处于激活/启用状态
         User.is_active.is_(True),
     )
     user = await db.scalar(stmt)
+    # 如果用户不存在或令牌已过期，则返回 None
+    # 防御性编程 防止用户不存在或令牌已过期
+    # 数据库是可以被外部直接修改的
     if not user or not user.token_expires_at:
         return None
+    # 如果令牌已过期，则返回 None
     if user.token_expires_at < datetime.utcnow():
         return None
     return user

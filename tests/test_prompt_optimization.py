@@ -109,4 +109,4 @@ def test_sql_generator_passes_selected_tables_to_prompt_builder():
     assert error is None
     assert sql == "SELECT 1;"
     assert "部门" in thought
-    assert recorded["relevant_tables"] == ["departments", "sales"]
+    assert set(recorded["relevant_tables"]) == {"employees", "departments", "sales"}

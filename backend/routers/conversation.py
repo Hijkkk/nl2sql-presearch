@@ -18,7 +18,12 @@ async def list_conversations(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse:
-    """Return current user's conversation list."""
+    """
+    Return current user's conversation list.
+    返回当前用户的对话列表。
+    返回对话列表。
+    """
+    # 接受分页参数 每行信息 以及总条数
     rows, total = await conversation_crud.list_conversations(
         db=db,
         user_id=current_user.id,
@@ -42,7 +47,11 @@ async def create_conversation(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse:
-    """Create a conversation before or during a chat."""
+    """
+    Create a conversation before or during a chat.
+    在聊天之前或期间创建一个对话。
+    创建对话。
+    """
     conversation = await conversation_crud.create_conversation(
         db=db,
         user_id=current_user.id,
@@ -61,7 +70,11 @@ async def get_conversation(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse:
-    """Return one conversation with messages."""
+    """
+    Return one conversation with messages.
+    返回一个对话及其消息。
+    获取对话。
+    """
     conversation = await conversation_crud.get_conversation(
         db=db,
         user_id=current_user.id,
@@ -85,7 +98,11 @@ async def delete_conversation(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse:
-    """Delete one conversation owned by current user."""
+    """
+    Delete one conversation owned by current user.
+    删除当前用户拥有的一个对话。
+    删除对话。
+    """
     deleted = await conversation_crud.delete_conversation(
         db=db,
         user_id=current_user.id,

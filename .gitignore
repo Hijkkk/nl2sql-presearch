@@ -1,5 +1,7 @@
 # Environment
 .env
+env.txt.copy
+
 
 
 # PyCharm
@@ -18,7 +20,10 @@ venv/
 
 # Database
 *.db
+data/metadata_summaries.json
 
 
 # Logs
 *.log
+
+

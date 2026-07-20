@@ -74,6 +74,98 @@ class Settings(BaseSettings):
     mysql_query_charset: str = Field(default="utf8mb4", alias="MYSQL_QUERY_CHARSET")
     mysql_query_description: str = Field(default="本地 MySQL 业务数据库", alias="MYSQL_QUERY_DESCRIPTION")
 
+    # ==================== 元数据摘要与 Prompt 压缩 ====================
+    # 控制是否对数据库元数据（表结构信息）生成简短摘要
+    # # 未启用时，发给 LLM 的原始元数据（很长）：
+    # {
+    #   "name": "employees",
+    #   "columns": [
+    #     {"name": "id", "type": "INTEGER", "comment": "员工ID"},
+    #     {"name": "name", "type": "TEXT", "comment": "姓名"},
+    #     {"name": "dept", "type": "TEXT", "comment": "所属部门"},
+    #     {"name": "salary", "type": "REAL", "comment": "薪资"},
+    #     ...很多字段
+    #   ]
+    # }
+    #
+    # # 启用后，多了 summary 字段（压缩版）：
+    # {
+    #   "name": "employees",
+    #   "summary": "员工信息表，含部门、薪资、经理关系",  ← 一句话概括
+    #   "columns": [...]
+    # }
+    # 好处：表很多、字段很多时，Prompt 会非常长。加上摘要后 LLM 能更快理解表的用途，同时减少 token 消耗。
+    metadata_summary_enabled: bool = Field(default=True, alias="METADATA_SUMMARY_ENABLED")
+    # 控制是否在对话中使用 LLM 生成元数据摘要
+    # False（默认）规则生成：直接拼接表名+注释+字段名
+    # chat_module.py 中的使用
+    metadata_summary_use_llm_in_chat: bool = Field(default=False, alias="METADATA_SUMMARY_USE_LLM_IN_CHAT")
+    # 元数据摘要缓存路径
+    metadata_summary_cache_path: str = Field(
+        default="./data/metadata_summaries.json",
+        alias="METADATA_SUMMARY_CACHE_PATH",
+    )
+
+    # ==================== REST API 查询数据源配置 ====================
+    rest_api_enabled: bool = Field(default=False, alias="REST_API_ENABLED")
+    rest_api_name: str = Field(default="rest_api_demo", alias="REST_API_NAME")
+    rest_api_url: str = Field(default="", alias="REST_API_URL")
+    rest_api_table_name: str = Field(default="api_records", alias="REST_API_TABLE_NAME")
+    rest_api_data_path: str = Field(default="", alias="REST_API_DATA_PATH")
+    rest_api_description: str = Field(default="REST API JSON 数据源", alias="REST_API_DESCRIPTION")
+    rest_api_headers_json: str = Field(default="{}", alias="REST_API_HEADERS_JSON")
+    rest_api_query_params_json: str = Field(default="{}", alias="REST_API_QUERY_PARAMS_JSON")
+    rest_api_key_param: str = Field(default="", alias="REST_API_KEY_PARAM")
+    rest_api_api_key: str = Field(default="", alias="REST_API_API_KEY")
+    rest_api_timeout: float = Field(default=10.0, alias="REST_API_TIMEOUT")
+    rest_api_cache_ttl_seconds: float = Field(default=60.0, alias="REST_API_CACHE_TTL_SECONDS")
+    rest_api_service_mode: str = Field(default="table", alias="REST_API_SERVICE_MODE")
+
+    # ==================== PostgreSQL 查询数据源配置 ====================
+    postgres_query_enabled: bool = Field(default=False, alias="POSTGRES_QUERY_ENABLED")
+    postgres_query_name: str = Field(default="postgres_local", alias="POSTGRES_QUERY_NAME")
+    postgres_query_host: str = Field(default="127.0.0.1", alias="POSTGRES_QUERY_HOST")
+    postgres_query_port: int = Field(default=5432, alias="POSTGRES_QUERY_PORT")
+    postgres_query_user: str = Field(default="postgres", alias="POSTGRES_QUERY_USER")
+    postgres_query_password: str = Field(default="", alias="POSTGRES_QUERY_PASSWORD")
+    postgres_query_database: str = Field(default="", alias="POSTGRES_QUERY_DATABASE")
+    postgres_query_schema: str = Field(default="public", alias="POSTGRES_QUERY_SCHEMA")
+    postgres_query_description: str = Field(default="PostgreSQL 业务数据库", alias="POSTGRES_QUERY_DESCRIPTION")
+
+    # ==================== 高斯数据库查询数据源配置 ====================
+    # 高斯常见部署兼容 PostgreSQL 协议，MVP 阶段复用 PostgreSQLAdapter。
+    gauss_query_enabled: bool = Field(default=False, alias="GAUSS_QUERY_ENABLED")
+    gauss_query_name: str = Field(default="gauss_local", alias="GAUSS_QUERY_NAME")
+    gauss_query_host: str = Field(default="127.0.0.1", alias="GAUSS_QUERY_HOST")
+    gauss_query_port: int = Field(default=5432, alias="GAUSS_QUERY_PORT")
+    gauss_query_user: str = Field(default="", alias="GAUSS_QUERY_USER")
+    gauss_query_password: str = Field(default="", alias="GAUSS_QUERY_PASSWORD")
+    gauss_query_database: str = Field(default="", alias="GAUSS_QUERY_DATABASE")
+    gauss_query_schema: str = Field(default="public", alias="GAUSS_QUERY_SCHEMA")
+    gauss_query_description: str = Field(default="高斯数据库业务数据源", alias="GAUSS_QUERY_DESCRIPTION")
+
+    # ==================== Hive / Hadoop 查询数据源配置 ====================
+    # Hadoop 本身是分布式存储/计算生态；NL2SQL 通常通过 HiveServer2 执行 SQL。
+    hive_query_enabled: bool = Field(default=False, alias="HIVE_QUERY_ENABLED")
+    hive_query_name: str = Field(default="hive_local", alias="HIVE_QUERY_NAME")
+    hive_query_host: str = Field(default="127.0.0.1", alias="HIVE_QUERY_HOST")
+    hive_query_port: int = Field(default=10000, alias="HIVE_QUERY_PORT")
+    hive_query_user: str = Field(default="", alias="HIVE_QUERY_USER")
+    hive_query_password: str = Field(default="", alias="HIVE_QUERY_PASSWORD")
+    hive_query_database: str = Field(default="default", alias="HIVE_QUERY_DATABASE")
+    hive_query_auth: str = Field(default="NOSASL", alias="HIVE_QUERY_AUTH")
+    hive_query_description: str = Field(default="Hive/Hadoop 数仓数据源", alias="HIVE_QUERY_DESCRIPTION")
+
+    # ==================== 达梦数据库查询数据源配置 ====================
+    dameng_query_enabled: bool = Field(default=False, alias="DAMENG_QUERY_ENABLED")
+    dameng_query_name: str = Field(default="dameng_local", alias="DAMENG_QUERY_NAME")
+    dameng_query_host: str = Field(default="127.0.0.1", alias="DAMENG_QUERY_HOST")
+    dameng_query_port: int = Field(default=5236, alias="DAMENG_QUERY_PORT")
+    dameng_query_user: str = Field(default="", alias="DAMENG_QUERY_USER")
+    dameng_query_password: str = Field(default="", alias="DAMENG_QUERY_PASSWORD")
+    dameng_query_schema: str = Field(default="", alias="DAMENG_QUERY_SCHEMA")
+    dameng_query_description: str = Field(default="达梦数据库业务数据源", alias="DAMENG_QUERY_DESCRIPTION")
+
     # ==================== 安全与健壮性 ====================
     """
     这三个配置是 NL2SQL 系统的防护措施：

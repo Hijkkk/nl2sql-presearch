@@ -20,6 +20,8 @@ class SQLGenerator:
         self.model = settings.llm_model
         self.api_key = settings.llm_api_key
 
+    # 生成 SQL
+    # 返回: (sql, thought, error)
     async def generate_sql(self, question: str, metadata: Dict[str, Any],
                            dialect: str = "sqlite") -> Tuple[str, str, Optional[str]]:
         """
@@ -99,6 +101,7 @@ class SQLGenerator:
             logger.error(f"LLM generation error: {e}")
             return "", "", f"SQL生成异常: {str(e)}"
 
+    # 从 LLM 响应中提取思考过程和 SQL 代码块
     def _extract_thought_and_sql(self, content: str) -> Tuple[str, str]:
         """从 LLM 响应中提取思考过程和 SQL 代码块"""
         thought = ""
@@ -123,6 +126,8 @@ class SQLGenerator:
 
         return thought, sql
 
+    #   清理 SQL 中的多余内容
+    #  去掉多余的 markdown
     def _clean_sql(self, sql: str) -> str:
         """清理 SQL 中的多余内容"""
         # 去掉多余的 markdown
@@ -133,6 +138,7 @@ class SQLGenerator:
             sql = sql.split(';')[0] + ';'
         return sql.strip()
 
+    # Self-Correction: 让 LLM 根据执行错误修复 SQL
     async def self_correct_sql(self, original_sql: str, error_msg: str,
                                question: str, metadata: Dict[str, Any],
                                dialect: str = "sqlite") -> Tuple[str, str]:

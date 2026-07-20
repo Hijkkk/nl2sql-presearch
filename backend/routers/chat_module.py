@@ -1,6 +1,6 @@
 import time
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.crud import conversation as conversation_crud
@@ -15,11 +15,46 @@ from datetime import datetime
 from loguru import logger
 
 from backend.nl2sql.sql_generator import SQLGenerator
+from backend.nl2sql.metadata_summarizer import MetadataSummarizer
+from backend.api_services.amap_lbs_service import AmapLBSService
 from backend.security.query_guard import QueryGuard
 
 router = APIRouter(prefix="/api/v1", tags=["chat_module"])
 
 sql_generator = SQLGenerator()
+metadata_summarizer = MetadataSummarizer()
+amap_lbs_service = AmapLBSService()
+
+
+def append_configured_source(
+    sources: list[DataSourceInfo],
+    *,
+    enabled: bool,
+    name: str,
+    source_type: str,
+    description: str,
+) -> None:
+    if not enabled:
+        return
+
+    status = "connected"
+    final_description = description
+    try:
+        adapter = get_adapter(name)
+        if hasattr(adapter, "ping"):
+            adapter.ping()
+    except Exception as exc:
+        status = "error"
+        final_description = f"{description} 连接失败：{exc}"
+
+    sources.append(
+        DataSourceInfo(
+            name=name,
+            type=source_type,
+            status=status,
+            description=final_description,
+        )
+    )
 
 @router.get("/data-sources", response_model=list[DataSourceInfo])
 async def list_data_sources():
@@ -32,35 +67,68 @@ async def list_data_sources():
             description="内置演示数据库（employees, departments, sales）- 适合测试复杂查询"
         )
     ]
-    if settings.mysql_query_enabled:
-        status = "connected"
-        description = settings.mysql_query_description
-        try:
-            adapter = get_adapter(settings.mysql_query_name)
-            if hasattr(adapter, "ping"):
-                adapter.ping()
-        except Exception as exc:
-            status = "error"
-            description = f"MySQL 连接失败：{exc}"
-
-        sources.append(
-            DataSourceInfo(
-                name=settings.mysql_query_name,
-                type="mysql",
-                status=status,
-                description=description,
-            )
-        )
+    append_configured_source(
+        sources,
+        enabled=settings.mysql_query_enabled,
+        name=settings.mysql_query_name,
+        source_type="mysql",
+        description=settings.mysql_query_description,
+    )
+    append_configured_source(
+        sources,
+        enabled=settings.postgres_query_enabled,
+        name=settings.postgres_query_name,
+        source_type="postgresql",
+        description=settings.postgres_query_description,
+    )
+    append_configured_source(
+        sources,
+        enabled=settings.gauss_query_enabled,
+        name=settings.gauss_query_name,
+        source_type="gauss",
+        description=settings.gauss_query_description,
+    )
+    append_configured_source(
+        sources,
+        enabled=settings.hive_query_enabled,
+        name=settings.hive_query_name,
+        source_type="hive",
+        description=settings.hive_query_description,
+    )
+    append_configured_source(
+        sources,
+        enabled=settings.dameng_query_enabled,
+        name=settings.dameng_query_name,
+        source_type="dameng",
+        description=settings.dameng_query_description,
+    )
+    append_configured_source(
+        sources,
+        enabled=settings.rest_api_enabled,
+        name=settings.rest_api_name,
+        source_type="rest_api",
+        description=settings.rest_api_description,
+    )
 
     return sources
 
 
 @router.get("/metadata/{data_source}", response_model=MetadataResponse)
-async def get_metadata(data_source: str):
+async def get_metadata(
+    data_source: str,
+    summarize: bool = Query(default=False, description="是否返回摘要压缩后的元数据"),
+):
     """获取数据源元数据"""
     adapter = get_adapter(data_source)
     try:
         meta = adapter.get_metadata()
+        if summarize and settings.metadata_summary_enabled:
+            meta = await metadata_summarizer.summarize_metadata(
+                meta,
+                data_source=data_source,
+                # 这是给前端展示表结构用的接口，要求快速响应，不需要高质量摘要。
+                use_llm=False,
+            )
         return MetadataResponse(
             data_source=data_source,
             tables=meta["tables"],
@@ -69,6 +137,39 @@ async def get_metadata(data_source: str):
         )
     except Exception as e:
         logger.error(f"Metadata error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# 这是一个后台预热接口，管理员在空闲时调用，提前用 LLM 生成高质量摘要并缓存。
+# 之后用户聊天时直接读缓存，既享受高质量摘要，又不影响响应速度。
+# # 管理员在部署后执行一次
+# curl -X POST "http://127.0.0.1:8000/api/v1/metadata/sqlite_demo/summaries?use_llm=true"
+# 表结构变了，强制重新生成 改了数据库字段、注释
+# curl -X POST "http://127.0.0.1:8000/api/v1/metadata/sqlite_demo/summaries?use_llm=true&refresh=true"
+@router.post("/metadata/{data_source}/summaries", response_model=MetadataResponse)
+async def warmup_metadata_summaries(
+    data_source: str,
+    refresh: bool = Query(default=False, description="是否强制重新生成摘要"),
+    use_llm: bool = Query(default=True, description="是否调用 LLM 生成业务摘要"),
+):
+    """预生成并缓存数据源元数据摘要，用于降低后续 NL2SQL Prompt 长度。"""
+    adapter = get_adapter(data_source)
+    try:
+        meta = adapter.get_metadata()
+        summarized_meta = await metadata_summarizer.summarize_metadata(
+            meta,
+            data_source=data_source,
+            refresh=refresh,
+            use_llm=use_llm,
+        )
+        return MetadataResponse(
+            data_source=data_source,
+            tables=summarized_meta["tables"],
+            total_tables=summarized_meta["total_tables"],
+            generated_at=datetime.now()
+        )
+    except Exception as e:
+        logger.error(f"Metadata summary warmup error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -113,8 +214,34 @@ async def chat(
         return response
 
     try:
+        if (
+            request.data_source == settings.rest_api_name
+            and settings.rest_api_service_mode == "amap_lbs"
+            and amap_lbs_service.can_handle(request.question)
+        ):
+            response = amap_lbs_service.answer(request.question)
+            log_audit(
+                question=request.question,
+                generated_sql=response.sql or "",
+                executed_sql=response.sql or "",
+                data_source=request.data_source,
+                row_count=response.row_count or 0,
+                status="success" if response.success else "failed",
+                error_message=response.error,
+                execution_time=response.execution_time or 0,
+            )
+            return await persist_response(response)
+
         # 1. 获取元数据
+        # 用户每次发消息都要等 SQL 生成结果，
+        # 如果还要等 LLM 生成摘要，响应太慢。规则模式毫秒级完成，不影响用户体验。
         metadata = adapter.get_metadata()
+        if settings.metadata_summary_enabled:
+            metadata = await metadata_summarizer.summarize_metadata(
+                metadata,
+                data_source=request.data_source,
+                use_llm=settings.metadata_summary_use_llm_in_chat,
+            )
 
         # 2. LLM 生成 SQL
         sql, thought, gen_error = await sql_generator.generate_sql(

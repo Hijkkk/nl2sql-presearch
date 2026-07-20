@@ -2,10 +2,16 @@
 适配器注册表 - 集中管理数据源适配器的创建和缓存
 避免 main.py 和 routers 之间的循环导入
 """
+import json
+
 from fastapi import HTTPException
 from backend.config.config import settings
 from .sqlite_adapter import SQLiteAdapter
 from .mysql_adapter import MySQLAdapter
+from .postgres_adapter import PostgreSQLAdapter
+from .hive_adapter import HiveAdapter
+from .dameng_adapter import DamengAdapter
+from .rest_api_adapter import RESTAPIAdapter
 from .base import BaseDataSourceAdapter
 
 # 全局适配器注册表
@@ -56,6 +62,96 @@ def get_adapter(data_source: str) -> BaseDataSourceAdapter:
                 password=settings.mysql_query_password,
                 database=settings.mysql_query_database,
                 charset=settings.mysql_query_charset,
+            )
+        elif data_source == settings.postgres_query_name:
+            if not settings.postgres_query_enabled:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"PostgreSQL 数据源 {data_source} 未启用"
+                )
+            ADAPTERS[data_source] = PostgreSQLAdapter(
+                name=settings.postgres_query_name,
+                host=settings.postgres_query_host,
+                port=settings.postgres_query_port,
+                user=settings.postgres_query_user,
+                password=settings.postgres_query_password,
+                database=settings.postgres_query_database,
+                schema=settings.postgres_query_schema,
+            )
+        elif data_source == settings.gauss_query_name:
+            if not settings.gauss_query_enabled:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"高斯数据源 {data_source} 未启用"
+                )
+            ADAPTERS[data_source] = PostgreSQLAdapter(
+                name=settings.gauss_query_name,
+                host=settings.gauss_query_host,
+                port=settings.gauss_query_port,
+                user=settings.gauss_query_user,
+                password=settings.gauss_query_password,
+                database=settings.gauss_query_database,
+                schema=settings.gauss_query_schema,
+            )
+        elif data_source == settings.hive_query_name:
+            if not settings.hive_query_enabled:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Hive/Hadoop 数据源 {data_source} 未启用"
+                )
+            ADAPTERS[data_source] = HiveAdapter(
+                name=settings.hive_query_name,
+                host=settings.hive_query_host,
+                port=settings.hive_query_port,
+                username=settings.hive_query_user,
+                password=settings.hive_query_password,
+                database=settings.hive_query_database,
+                auth=settings.hive_query_auth,
+            )
+        elif data_source == settings.dameng_query_name:
+            if not settings.dameng_query_enabled:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"达梦数据源 {data_source} 未启用"
+                )
+            ADAPTERS[data_source] = DamengAdapter(
+                name=settings.dameng_query_name,
+                host=settings.dameng_query_host,
+                port=settings.dameng_query_port,
+                user=settings.dameng_query_user,
+                password=settings.dameng_query_password,
+                schema=settings.dameng_query_schema,
+            )
+        elif data_source == settings.rest_api_name:
+            if not settings.rest_api_enabled:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"REST API 数据源 {data_source} 未启用"
+                )
+            try:
+                headers = json.loads(settings.rest_api_headers_json or "{}")
+                if not isinstance(headers, dict):
+                    raise ValueError("REST_API_HEADERS_JSON 必须是 JSON 对象")
+                query_params = json.loads(settings.rest_api_query_params_json or "{}")
+                if not isinstance(query_params, dict):
+                    raise ValueError("REST_API_QUERY_PARAMS_JSON 必须是 JSON 对象")
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"REST API 配置错误: {exc}"
+                )
+
+            ADAPTERS[data_source] = RESTAPIAdapter(
+                name=settings.rest_api_name,
+                url=settings.rest_api_url,
+                table_name=settings.rest_api_table_name,
+                data_path=settings.rest_api_data_path,
+                headers={str(key): str(value) for key, value in headers.items()},
+                query_params=query_params,
+                api_key_param=settings.rest_api_key_param,
+                api_key=settings.rest_api_api_key,
+                timeout=settings.rest_api_timeout,
+                cache_ttl_seconds=settings.rest_api_cache_ttl_seconds,
             )
         else:
             raise HTTPException(

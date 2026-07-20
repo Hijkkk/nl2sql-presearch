@@ -35,10 +35,10 @@ class Conversation(Base):
     )
 
     messages: Mapped[list["ConversationMessage"]] = relationship(
-        back_populates="conversation",
-        cascade="all, delete-orphan",
-        passive_deletes=True,
-        lazy="selectin",
+        back_populates="conversation",  # 双向绑定：消息那边也有 conversation 字段指回会话
+        cascade="all, delete-orphan",  # 删除会话时，自动删除它下面所有消息
+        passive_deletes=True,  # 删除时依赖数据库的外键级联，不额外发 SQL
+        lazy="selectin",  # 查询会话时自动用额外一条 SQL 把消息一起加载
     )
 
 

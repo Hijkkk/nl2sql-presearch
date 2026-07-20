@@ -50,6 +50,7 @@ def to_message_out(message: ConversationMessage) -> ConversationMessageOut:
 
 
 def to_detail(conversation: Conversation) -> ConversationDetail:
+    # 排序依据：每条消息的 created_at 时间
     messages = sorted(conversation.messages, key=lambda item: item.created_at)
     return ConversationDetail(
         **to_summary(conversation).model_dump(),
@@ -57,6 +58,83 @@ def to_detail(conversation: Conversation) -> ConversationDetail:
         last_sql=conversation.last_sql,
         messages=[to_message_out(message) for message in messages],
     )
+# {
+#   "id": "conv_abc123",
+#   "title": "查询IT部门员工",
+#   "data_source": "sqlite_demo",
+#   "model_id": "qwen3-coder-next-fp8",
+#   "message_count": 4,
+#   "created_at": "2026-07-20T10:00:00",
+#   "updated_at": "2026-07-20T10:35:00",
+#
+#   "model_conf": {
+#     "temperature": 0.2,
+#     "top_p": 0.8,
+#     "max_tokens": 2048,
+#     "enable_sql_safety": true
+#   },
+#
+#   "last_sql": "SELECT * FROM sales WHERE dept='IT'",
+#
+#   "messages": [
+#     {
+#       "id": "msg_001",
+#       "role": "user",
+#       "content": "查询IT部门有多少员工",
+#       "sql": null,
+#       "columns": null,
+#       "results": null,
+#       "row_count": null,
+#       "execution_time": null,
+#       "insight": null,
+#       "success": null,
+#       "error": null,
+#       "created_at": "2026-07-20T10:00:00"
+#     },
+#     {
+#       "id": "msg_002",
+#       "role": "assistant",
+#       "content": "IT部门共有 15 名员工。",
+#       "sql": "SELECT COUNT(*) FROM employees WHERE dept='IT'",
+#       "columns": ["COUNT(*)"],
+#       "results": [{"COUNT(*)": 15}],
+#       "row_count": 1,
+#       "execution_time": 0.023,
+#       "insight": "IT部门人数适中",
+#       "success": true,
+#       "error": null,
+#       "created_at": "2026-07-20T10:00:05"
+#     },
+#     {
+#       "id": "msg_003",
+#       "role": "user",
+#       "content": "再查一下销售部的",
+#       "sql": null,
+#       "columns": null,
+#       "results": null,
+#       "row_count": null,
+#       "execution_time": null,
+#       "insight": null,
+#       "success": null,
+#       "error": null,
+#       "created_at": "2026-07-20T10:30:00"
+#     },
+#     {
+#       "id": "msg_004",
+#       "role": "assistant",
+#       "content": "销售部共有 28 名员工。",
+#       "sql": "SELECT COUNT(*) FROM employees WHERE dept='销售'",
+#       "columns": ["COUNT(*)"],
+#       "results": [{"COUNT(*)": 28}],
+#       "row_count": 1,
+#       "execution_time": 0.018,
+#       "insight": "销售部人数多于IT部门",
+#       "success": true,
+#       "error": null,
+#       "created_at": "2026-07-20T10:30:05"
+#     }
+#   ]
+# }
 
 
 async def list_conversations(
@@ -65,15 +143,23 @@ async def list_conversations(
     page: int,
     page_size: int,
 ) -> tuple[list[ConversationSummary], int]:
+    # 防止前端传恶意参数（如 page=-999、page_size=100000）导致数据库压力过大或返回异常数据。
+    # 防止页码 ≤ 0，最小取 1
     page = max(page, 1)
+    # 防止每页数量 ≤ 0，最小取 1，最大取 100
     page_size = min(max(page_size, 1), 100)
+    # 计算分页偏移量
     offset = (page - 1) * page_size
-
+    # 查询总数
     total_stmt = select(func.count()).select_from(Conversation).where(
         Conversation.user_id == user_id
     )
+    # 执行查询
     total = await db.scalar(total_stmt) or 0
 
+    # 查询分页数据
+    # 优先按 updated_at 降序：最近有更新的对话排在最前面（比如刚发了新消息的会话）
+    # 相同则按 created_at 降序：如果更新时间一样，新建的排前面
     stmt = (
         select(Conversation)
         .where(Conversation.user_id == user_id)
@@ -82,6 +168,8 @@ async def list_conversations(
         .limit(page_size)
     )
     rows = (await db.scalars(stmt)).all()
+    # 对每条数据使用 to_summary 函数进行转换封装
+    # total 是总数
     return [to_summary(item) for item in rows], total
 
 
@@ -110,14 +198,37 @@ async def get_conversation(
     user_id: int,
     conversation_id: str,
 ) -> Optional[ConversationDetail]:
+    # @todo
     stmt = (
         select(Conversation)
+        # 表示 Conversation（会话）和 ConversationMessage（消息）之间的一对多关系。
         .options(selectinload(Conversation.messages))
         .where(
             Conversation.id == conversation_id,
             Conversation.user_id == user_id,
         )
     )
+    # 实际执行的 SQL（两条）
+    # -- 第1条：查会话
+    # SELECT * FROM conversation WHERE id = 1 AND user_id = 5;
+    #
+    # -- 第2条：查该会话的所有消息（selectinload 自动发起）
+    # SELECT * FROM conversation_message WHERE conversation_id = 1;
+
+    # Conversation
+    # ├── id: 1
+    # ├── user_id: 5
+    # ├── title: "查询IT部门员工"
+    # ├── data_source: "sqlite_demo"
+    # ├── created_at: 2026-07-20 10:00:00
+    # ├── updated_at: 2026-07-20 10:30:00
+    # │
+    # └── messages: [                          ← 自动加载的消息列表
+    #         ConversationMessage(id=1, role="user",      content="查询IT部门有多少员工"),
+    #         ConversationMessage(id=2, role="assistant",  content="SELECT COUNT(*)..."),
+    #         ConversationMessage(id=3, role="user",      content="再查一下销售部"),
+    #         ConversationMessage(id=4, role="assistant",  content="SELECT ... FROM sales..."),
+    #     ]
     conversation = await db.scalar(stmt)
     if not conversation:
         return None
