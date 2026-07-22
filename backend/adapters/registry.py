@@ -77,6 +77,7 @@ def get_adapter(data_source: str) -> BaseDataSourceAdapter:
                 password=settings.postgres_query_password,
                 database=settings.postgres_query_database,
                 schema=settings.postgres_query_schema,
+                sslmode=settings.postgres_query_sslmode,
             )
         elif data_source == settings.gauss_query_name:
             if not settings.gauss_query_enabled:
@@ -92,6 +93,7 @@ def get_adapter(data_source: str) -> BaseDataSourceAdapter:
                 password=settings.gauss_query_password,
                 database=settings.gauss_query_database,
                 schema=settings.gauss_query_schema,
+                sslmode="",
             )
         elif data_source == settings.hive_query_name:
             if not settings.hive_query_enabled:
@@ -121,6 +123,7 @@ def get_adapter(data_source: str) -> BaseDataSourceAdapter:
                 user=settings.dameng_query_user,
                 password=settings.dameng_query_password,
                 schema=settings.dameng_query_schema,
+                jdbc_driver_path=settings.dameng_jdbc_driver_path,
             )
         elif data_source == settings.rest_api_name:
             if not settings.rest_api_enabled:

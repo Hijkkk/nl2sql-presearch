@@ -197,7 +197,7 @@ async def chat(
                 data_source=request.data_source,
                 model_id=request.model_id,
                 model_config=request.model_conf,
-                ai_content=response.llm_thought or response.insight or response.error or "",
+                ai_content=response.answer or response.insight or response.llm_thought or response.error or "",
                 sql=response.sql,
                 columns=response.columns,
                 results=response.results,
@@ -219,7 +219,18 @@ async def chat(
             and settings.rest_api_service_mode == "amap_lbs"
             and amap_lbs_service.can_handle(request.question)
         ):
-            response = amap_lbs_service.answer(request.question)
+            response = amap_lbs_service.answer(
+                request.question,
+                client_location=request.client_location,
+            )
+            if response.success:
+                response.answer = await sql_generator.summarize_result(
+                    request.question,
+                    response.columns or [],
+                    response.results or [],
+                    answer_template=(request.model_conf or {}).get("answer_template", "brief"),
+                    custom_instruction=(request.model_conf or {}).get("custom_instruction", ""),
+                )
             log_audit(
                 question=request.question,
                 generated_sql=response.sql or "",
@@ -310,6 +321,13 @@ async def chat(
             )
 
             insight = f"共返回 {row_count} 条记录。"
+            answer = await sql_generator.summarize_result(
+                request.question,
+                columns,
+                results,
+                answer_template=(request.model_conf or {}).get("answer_template", "brief"),
+                custom_instruction=(request.model_conf or {}).get("custom_instruction", ""),
+            )
 
             return await persist_response(ChatResponse(
                 success=True,
@@ -320,7 +338,8 @@ async def chat(
                 row_count=row_count,
                 execution_time=round(execution_time, 2),
                 llm_thought=thought,
-                insight=insight
+                insight=insight,
+                answer=answer,
             ))
 
         except Exception as exec_error:

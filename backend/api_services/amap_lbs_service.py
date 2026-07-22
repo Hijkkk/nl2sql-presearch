@@ -6,6 +6,7 @@
 - 根据自然语言问题选择高德服务。
 - 从问题中抽取简单参数，调用对应 endpoint。
 - 返回 ChatResponse 可直接展示的表格结果。
+# 只是调 API + 解析数据
 
 这不是替代 RESTAPIAdapter，而是建立在 REST API 基础设施之上的服务级适配层。
 """
@@ -40,24 +41,31 @@ class AmapLBSService:
             "附近", "周边", "搜索", "查询", "定位", "ip",
             "现在", "当前位置", "当前城市", "哪个城市", "在哪", "大概在哪", "所在城市",
         ]
+        # 用户问："北京天气怎么样" → 包含"天气" → True
+        # 用户问："查询销售额" → 不包含任何关键词 → False
+        # any() 是 Python 内置函数，只要 iterable 中有一个元素为 True，就返回 True，否则返回 False。
         return any(keyword in question.lower() for keyword in keywords)
 
-    def answer(self, question: str) -> ChatResponse:
+    # 处理用户问题，返回 ChatResponse。
+    def answer(self, question: str, client_location: Optional[Dict[str, Any]] = None) -> ChatResponse:
         start = time.time()
         try:
-            service = self._select_service(question)
-            rows = service["handler"](question)
-            columns = self._collect_columns(rows)
+            service = self._select_service(question, client_location=client_location)  # 1. 选择要调的高德服务
+            if service.get("requires_client_location"):
+                rows = service["handler"](question, client_location)  # 2. 调用对应的处理函数
+            else:
+                rows = service["handler"](question)
+            columns = self._collect_columns(rows)   # 3. 收集字段名
             return ChatResponse(
                 success=True,
                 question=question,
-                sql=f"GET {service['endpoint']}",
-                results=rows,
+                sql=f"GET {service['endpoint']}",   # 显示调了哪个 API
+                results=rows,  # 返回数据
                 columns=columns,
                 row_count=len(rows),
                 execution_time=round(time.time() - start, 2),
                 llm_thought=f"已识别为高德地图 {service['name']} 服务调用。",
-                insight=self._build_insight(service["name"], rows),
+                insight=self._build_insight(service["name"], rows),   # 生成自然语言总结
             )
         except Exception as exc:
             return ChatResponse(
@@ -68,7 +76,15 @@ class AmapLBSService:
                 llm_thought="问题已进入高德 LBS 服务编排器，但参数抽取或接口调用失败。",
             )
 
-    def _select_service(self, question: str) -> Dict[str, Any]:
+    def _select_service(
+        self,
+        question: str,
+        client_location: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        client_location_service = self._select_client_location_service(question, client_location)
+        if client_location_service:
+            return client_location_service
+
         if self._is_current_location_question(question):
             return {"name": "IP定位", "endpoint": "/v3/ip", "handler": self._ip_location}
         if any(word in question for word in ["天气", "温度", "湿度", "下雨", "晴"]):
@@ -92,6 +108,38 @@ class AmapLBSService:
         if any(word in question for word in ["搜索", "查询"]):
             return {"name": "关键字搜索", "endpoint": "/v3/place/text", "handler": self._text_search}
         raise ValueError("暂未识别出可调用的高德服务，请换成天气、距离、行政区、地理编码、路线、周边搜索等问题")
+
+    def _select_client_location_service(
+        self,
+        question: str,
+        client_location: Optional[Dict[str, Any]],
+    ) -> Optional[Dict[str, Any]]:
+        if not client_location or not self._mentions_current_location(question):
+            return None
+
+        common = {"requires_client_location": True}
+        if any(word in question for word in ["距离", "多远", "到"]):
+            return {
+                **common,
+                "name": "当前位置距离测量",
+                "endpoint": "/v3/distance",
+                "handler": self._distance_from_client_location,
+            }
+        if any(word in question for word in ["附近", "周边"]):
+            return {
+                **common,
+                "name": "当前位置周边搜索",
+                "endpoint": "/v3/place/around",
+                "handler": self._around_search_from_client_location,
+            }
+        if any(word in question for word in ["天气", "温度", "湿度", "下雨", "晴"]):
+            return {
+                **common,
+                "name": "当前位置天气查询",
+                "endpoint": "/v3/weather/weatherInfo",
+                "handler": self._weather_from_client_location,
+            }
+        return None
 
     def _weather(self, question: str) -> List[Dict[str, Any]]:
         query_city = self._extract_city(question)
@@ -199,6 +247,70 @@ class AmapLBSService:
         })
         return self._ensure_rows(payload.get("pois", []))
 
+    def _distance_from_client_location(
+        self,
+        question: str,
+        client_location: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
+        destination = self._extract_destination_from_current_location(question)
+        destination_location = self._resolve_location(destination)
+        payload = self._get("/v3/distance", {
+            "origins": self._format_client_location(client_location),
+            "destination": destination_location,
+            "type": "1",
+            "output": "JSON",
+        })
+        rows = self._ensure_rows(payload.get("results", []))
+        for row in rows:
+            row["origin_text"] = "当前位置"
+            row["origin_location_source"] = "browser_geolocation"
+            row["destination_text"] = destination
+        return self._decorate_distance_rows(rows)
+
+    def _around_search_from_client_location(
+        self,
+        question: str,
+        client_location: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
+        payload = self._get("/v3/place/around", {
+            "keywords": self._extract_keyword(question),
+            "location": self._format_client_location(client_location),
+            "radius": "3000",
+            "offset": "20",
+            "page": "1",
+            "extensions": "base",
+            "output": "JSON",
+        })
+        rows = self._ensure_rows(payload.get("pois", []))
+        for row in rows:
+            row["location_source"] = "browser_geolocation"
+        return rows
+
+    def _weather_from_client_location(
+        self,
+        question: str,
+        client_location: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
+        location = self._format_client_location(client_location)
+        regeo_payload = self._get("/v3/geocode/regeo", {"location": location, "output": "JSON"})
+        regeocode = regeo_payload.get("regeocode") or {}
+        address_component = regeocode.get("addressComponent") or {}
+        adcode = address_component.get("adcode")
+        if not adcode:
+            raise ValueError("无法根据浏览器定位解析行政区 adcode，不能查询当前位置天气")
+
+        weather_payload = self._get("/v3/weather/weatherInfo", {
+            "city": adcode,
+            "extensions": "base",
+            "output": "JSON",
+        })
+        rows = self._ensure_rows(weather_payload.get("lives", []))
+        for row in rows:
+            row["query_city_code"] = adcode
+            row["location_source"] = "browser_geolocation"
+            row["formatted_address"] = regeocode.get("formatted_address")
+        return rows
+
     def _ip_location(self, question: str) -> List[Dict[str, Any]]:
         payload = self._get("/v3/ip", {"output": "JSON"})
         payload["location_source"] = "ip"
@@ -249,7 +361,10 @@ class AmapLBSService:
         lower_question = question.lower()
         if "ip" in lower_question or "定位" in question:
             return True
-        return any(word in question for word in ["我现在", "当前位置", "当前城市", "哪个城市", "在哪", "大概在哪", "所在城市"])
+        return self._mentions_current_location(question)
+
+    def _mentions_current_location(self, question: str) -> bool:
+        return any(word in question for word in ["我现在", "当前位置", "当前城市", "哪个城市", "在哪", "大概在哪", "所在城市", "现在位置"])
 
     def _weather_city_candidates(self, city_text: str) -> List[str]:
         candidates: List[str] = []
@@ -304,9 +419,42 @@ class AmapLBSService:
                 tail = question.split(marker, 1)[1]
                 tail = re.split(r"的|在|附近|周边", tail)[0]
                 cleaned = self._clean_place(tail)
+                cleaned = self._clean_keyword(cleaned)
                 if cleaned:
                     return cleaned
         return "餐饮"
+
+    def _extract_destination_from_current_location(self, question: str) -> str:
+        patterns = [
+            r"(?:我现在|当前位置|现在位置|当前我|我所在位置).{0,4}到(.+?)(?:多远|距离|怎么走|路线|路程|$)",
+            r"到(.+?)(?:多远|距离|怎么走|路线|路程|$)",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, question)
+            if match:
+                destination = self._clean_place(match.group(1))
+                if destination:
+                    return destination
+        raise ValueError("请用“我当前位置到某地多远”描述目的地")
+
+    def _format_client_location(self, client_location: Dict[str, Any]) -> str:
+        longitude = client_location.get("longitude", client_location.get("lng"))
+        latitude = client_location.get("latitude", client_location.get("lat"))
+        try:
+            longitude_float = float(longitude)
+            latitude_float = float(latitude)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("浏览器定位缺少合法的 latitude/longitude") from exc
+
+        if not (-180 <= longitude_float <= 180 and -90 <= latitude_float <= 90):
+            raise ValueError("浏览器定位经纬度超出合法范围")
+        return f"{longitude_float:.6f},{latitude_float:.6f}"
+
+    def _clean_keyword(self, value: str) -> str:
+        cleaned = value
+        for token in ["有什么", "有哪些", "有没有", "一下", "帮我", "附近", "周边", "的"]:
+            cleaned = cleaned.replace(token, "")
+        return cleaned or "餐饮"
 
     def _extract_location(self, question: str) -> str:
         match = re.search(r"(\d{2,3}\.\d+)\s*[,，]\s*(\d{1,2}\.\d+)", question)
@@ -383,14 +531,14 @@ class AmapLBSService:
         return columns
 
     def _build_insight(self, service_name: str, rows: List[Dict[str, Any]]) -> str:
-        if service_name == "天气查询" and rows:
+        if service_name in {"天气查询", "当前位置天气查询"} and rows:
             row = rows[0]
             city = row.get("city") or row.get("query_city") or "目标城市"
             weather = row.get("weather")
             temperature = row.get("temperature")
             if weather and temperature:
                 return f"{city}当前天气为{weather}，温度 {temperature}℃。"
-        if service_name in {"距离测量", "驾车路径规划", "步行路径规划", "骑行路径规划"} and rows:
+        if service_name in {"距离测量", "当前位置距离测量", "驾车路径规划", "步行路径规划", "骑行路径规划"} and rows:
             row = rows[0]
             distance_text = row.get("distance_text")
             duration_text = row.get("duration_text")

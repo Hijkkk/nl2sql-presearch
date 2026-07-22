@@ -33,6 +33,10 @@ class ChatRequest(BaseModel):
     conversation_id: Optional[str] = None
     model_id: Optional[str] = None
     model_conf: Optional[Dict[str, Any]] = Field(default=None, alias="model_config")
+    client_location: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="浏览器 Geolocation API 返回的用户位置，例如 {latitude, longitude, accuracy}",
+    )
 
 """
 定义后端返回给前端的响应格式
@@ -60,10 +64,12 @@ class ChatResponse(BaseModel):
     row_count: Optional[int] = None
     execution_time: Optional[float] = None  # 秒
     llm_thought: Optional[str] = None
+    answer: Optional[str] = None
     insight: Optional[str] = None
     error: Optional[str] = None
     corrected_sql: Optional[str] = None  # 如果有自修复
 
+    memory_hit: bool = False
 """
 返回数据库的表结构信息（前端用来展示"有哪些表、哪些字段"）
     {

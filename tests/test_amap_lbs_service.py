@@ -30,12 +30,25 @@ class FakeAmapClient:
                 "status": "1",
                 "lives": [{"city": "东城区", "weather": "晴", "temperature": "31", "humidity": "40"}],
             })
+        if "geocode/regeo" in url:
+            return FakeResponse({
+                "status": "1",
+                "regeocode": {
+                    "formatted_address": "北京市东城区天安门",
+                    "addressComponent": {"adcode": "110101"},
+                },
+            })
         if "geocode/geo" in url:
             address = params.get("address", "")
             location = "116.397428,39.90923" if "天安门" in address else "116.481488,39.990464"
             return FakeResponse({"status": "1", "geocodes": [{"formatted_address": address, "location": location}]})
         if "distance" in url:
             return FakeResponse({"status": "1", "results": [{"distance": "12000", "duration": "1800"}]})
+        if "place/around" in url:
+            return FakeResponse({
+                "status": "1",
+                "pois": [{"name": "示例餐馆", "type": "餐饮服务", "distance": "350"}],
+            })
         if "config/district" in url:
             keyword = params.get("keywords", "")
             adcode = "110101" if "东城" in keyword else "110000"
@@ -97,3 +110,50 @@ def test_amap_current_city_question_uses_ip_location():
     assert response.sql == "GET /v3/ip"
     assert response.results[0]["city"] == "北京市"
     assert response.results[0]["location_source"] == "ip"
+
+
+def test_amap_distance_from_browser_location():
+    client = FakeAmapClient()
+    service = AmapLBSService(http_client=client)
+
+    response = service.answer(
+        "我当前位置到北京南站多远",
+        client_location={"latitude": 39.90923, "longitude": 116.397428, "accuracy": 30},
+    )
+
+    assert response.success is True
+    assert response.sql == "GET /v3/distance"
+    assert response.results[0]["origin_location_source"] == "browser_geolocation"
+    assert response.results[0]["destination_text"] == "北京南站"
+    distance_call = next(call for call in client.calls if "distance" in call["url"])
+    assert distance_call["params"]["origins"] == "116.397428,39.909230"
+
+
+def test_amap_around_search_from_browser_location():
+    service = AmapLBSService(http_client=FakeAmapClient())
+
+    response = service.answer(
+        "我当前位置附近有什么餐馆",
+        client_location={"lat": 39.90923, "lng": 116.397428},
+    )
+
+    assert response.success is True
+    assert response.sql == "GET /v3/place/around"
+    assert response.results[0]["name"] == "示例餐馆"
+    assert response.results[0]["location_source"] == "browser_geolocation"
+
+
+def test_amap_weather_from_browser_location_uses_regeo_adcode():
+    client = FakeAmapClient()
+    service = AmapLBSService(http_client=client)
+
+    response = service.answer(
+        "我现在位置天气怎么样",
+        client_location={"latitude": 39.90923, "longitude": 116.397428},
+    )
+
+    assert response.success is True
+    assert response.sql == "GET /v3/weather/weatherInfo"
+    assert response.results[0]["query_city_code"] == "110101"
+    assert response.results[0]["location_source"] == "browser_geolocation"
+    assert any("geocode/regeo" in call["url"] for call in client.calls)

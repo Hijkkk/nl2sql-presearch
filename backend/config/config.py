@@ -130,6 +130,7 @@ class Settings(BaseSettings):
     postgres_query_password: str = Field(default="", alias="POSTGRES_QUERY_PASSWORD")
     postgres_query_database: str = Field(default="", alias="POSTGRES_QUERY_DATABASE")
     postgres_query_schema: str = Field(default="public", alias="POSTGRES_QUERY_SCHEMA")
+    postgres_query_sslmode: str = Field(default="", alias="POSTGRES_QUERY_SSLMODE")
     postgres_query_description: str = Field(default="PostgreSQL 业务数据库", alias="POSTGRES_QUERY_DESCRIPTION")
 
     # ==================== 高斯数据库查询数据源配置 ====================
@@ -164,6 +165,7 @@ class Settings(BaseSettings):
     dameng_query_user: str = Field(default="", alias="DAMENG_QUERY_USER")
     dameng_query_password: str = Field(default="", alias="DAMENG_QUERY_PASSWORD")
     dameng_query_schema: str = Field(default="", alias="DAMENG_QUERY_SCHEMA")
+    dameng_jdbc_driver_path: str = Field(default="", alias="DAMENG_JDBC_DRIVER_PATH")
     dameng_query_description: str = Field(default="达梦数据库业务数据源", alias="DAMENG_QUERY_DESCRIPTION")
 
     # ==================== 安全与健壮性 ====================

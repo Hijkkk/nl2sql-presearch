@@ -13,5 +13,8 @@ python-multipart>=0.0.9
 jieba>=0.42.1
 # For MySQL (future)
 pymysql>=1.1.0
-# For PostgreSQL (optional)
-# psycopg2-binary>=2.9.0
+# For PostgreSQL / GaussDB
+psycopg2-binary>=2.9.0
+# For Dameng JDBC fallback when dmPython is unavailable
+JayDeBeApi>=1.2.3
+JPype1>=1.5.0

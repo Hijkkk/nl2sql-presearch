@@ -25,9 +25,10 @@ class PromptBuilder:
 3. 如果涉及多表，必须使用正确的 JOIN（优先使用外键关系）。
 4. 复杂统计必须使用 GROUP BY + 聚合函数（COUNT、SUM、AVG、MAX、MIN）。
 5. 支持子查询、窗口函数（ROW_NUMBER、RANK 等）、递归CTE（树形结构）。
-6. 结果要易读，合理使用别名（AS）。
-7. 最后必须用 ```sql\\nSELECT ... \\n``` 格式输出SQL。
-8. 在SQL之前，先用中文简要说明你的思考步骤（需求分析 → 涉及表 → JOIN逻辑 → 统计方式）。
+6. 结果要易读，必须合理使用中文别名（AS）。如果用户使用中文提问，SELECT 列表中的业务字段应尽量输出中文列名，例如 trade_date AS 交易日期、open_price AS 开盘价、close_price AS 收盘价、volume AS 成交量。
+7. 不要臆造元数据中不存在的字段。比如股票行情表只有 symbol 时，只能返回股票代码；如果没有股票名称/中文名字段，不要生成 stock_name、股票名称 等不存在的列。
+8. 最后必须用 ```sql\\nSELECT ... \\n``` 格式输出SQL。
+9. 在SQL之前，先用中文简要说明你的思考步骤（需求分析 → 涉及表 → JOIN逻辑 → 统计方式）。
 
 ## 支持的高级能力示例：
 - 多表JOIN + 条件过滤

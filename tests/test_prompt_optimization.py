@@ -110,3 +110,30 @@ def test_sql_generator_passes_selected_tables_to_prompt_builder():
     assert sql == "SELECT 1;"
     assert "部门" in thought
     assert set(recorded["relevant_tables"]) == {"employees", "departments", "sales"}
+
+
+def test_prompt_builder_requires_chinese_aliases():
+    prompt = PromptBuilder().build_prompt(
+        "查询 AAA 的交易日期、开盘价、收盘价和成交量",
+        {
+            "total_tables": 1,
+            "tables": [
+                {
+                    "name": "stock_daily_prices",
+                    "comment": "股票日行情表",
+                    "columns": [
+                        {"name": "symbol", "type": "varchar", "comment": "股票代码"},
+                        {"name": "trade_date", "type": "date", "comment": "交易日期"},
+                        {"name": "open_price", "type": "numeric", "comment": "开盘价"},
+                        {"name": "close_price", "type": "numeric", "comment": "收盘价"},
+                        {"name": "volume", "type": "int8", "comment": "成交量"},
+                    ],
+                    "foreign_keys": [],
+                }
+            ],
+        },
+    )
+
+    assert "trade_date AS 交易日期" in prompt
+    assert "open_price AS 开盘价" in prompt
+    assert "不要臆造元数据中不存在的字段" in prompt

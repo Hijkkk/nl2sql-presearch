@@ -1,5 +1,7 @@
 import os
 import sys
+from datetime import date
+from decimal import Decimal
 
 import pytest
 
@@ -21,6 +23,43 @@ def test_postgres_adapter_uses_postgres_dialect():
     )
 
     assert adapter.get_dialect() == "postgres"
+
+
+def test_postgres_adapter_keeps_sslmode_config():
+    adapter = PostgreSQLAdapter(
+        name="postgres_stock",
+        host="example.aivencloud.com",
+        port=10705,
+        user="avnadmin",
+        password="secret",
+        database="stock_market",
+        sslmode="require",
+    )
+
+    assert adapter.sslmode == "require"
+
+
+def test_postgres_adapter_normalizes_json_values():
+    adapter = PostgreSQLAdapter(
+        name="postgres_local",
+        host="127.0.0.1",
+        port=5432,
+        user="postgres",
+        password="",
+        database="demo",
+    )
+
+    row = adapter._normalize_row({
+        "trade_date": date(2026, 7, 20),
+        "close_price": Decimal("8.82"),
+        "volume": 440000000,
+    })
+
+    assert row == {
+        "trade_date": "2026-07-20",
+        "close_price": 8.82,
+        "volume": 440000000,
+    }
 
 
 def test_hive_adapter_uses_hive_dialect():
