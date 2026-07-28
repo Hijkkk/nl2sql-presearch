@@ -1,7 +1,7 @@
 # Environment
 .env
 env.txt.copy
-
+.env.bak.20260724_125031
 
 
 # PyCharm
@@ -21,6 +21,9 @@ venv/
 # Database
 *.db
 data/metadata_summaries.json
+
+
+data/
 
 
 # Logs
