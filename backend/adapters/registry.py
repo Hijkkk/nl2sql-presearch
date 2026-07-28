@@ -3,15 +3,17 @@
 避免 main.py 和 routers 之间的循环导入
 """
 import json
+import os
 
 from fastapi import HTTPException
 from backend.config.config import settings
 from .sqlite_adapter import SQLiteAdapter
 from .mysql_adapter import MySQLAdapter
 from .postgres_adapter import PostgreSQLAdapter
-from .hive_adapter import HiveAdapter
+from .hive_adapter import HadoopLocalDemoAdapter, HiveAdapter
 from .dameng_adapter import DamengAdapter
 from .rest_api_adapter import RESTAPIAdapter
+from .graphql_adapter import DEFAULT_COUNTRIES_QUERY, GraphQLAdapter
 from .base import BaseDataSourceAdapter
 
 # 全局适配器注册表
@@ -101,15 +103,24 @@ def get_adapter(data_source: str) -> BaseDataSourceAdapter:
                     status_code=404,
                     detail=f"Hive/Hadoop 数据源 {data_source} 未启用"
                 )
-            ADAPTERS[data_source] = HiveAdapter(
-                name=settings.hive_query_name,
-                host=settings.hive_query_host,
-                port=settings.hive_query_port,
-                username=settings.hive_query_user,
-                password=settings.hive_query_password,
-                database=settings.hive_query_database,
-                auth=settings.hive_query_auth,
-            )
+            if settings.hive_query_mode == "local_demo":
+                # 优先用 data_dir（新方案：扫描目录下所有 hadoop_*.csv 多表星型模型）
+                # 兼容老配置 hive_demo_csv_path（单文件）
+                data_dir = settings.hive_demo_data_dir or os.path.dirname(settings.hive_demo_csv_path)
+                ADAPTERS[data_source] = HadoopLocalDemoAdapter(
+                    name=settings.hive_query_name,
+                    data_dir=data_dir,
+                )
+            else:
+                ADAPTERS[data_source] = HiveAdapter(
+                    name=settings.hive_query_name,
+                    host=settings.hive_query_host,
+                    port=settings.hive_query_port,
+                    username=settings.hive_query_user,
+                    password=settings.hive_query_password,
+                    database=settings.hive_query_database,
+                    auth=settings.hive_query_auth,
+                )
         elif data_source == settings.dameng_query_name:
             if not settings.dameng_query_enabled:
                 raise HTTPException(
@@ -155,6 +166,36 @@ def get_adapter(data_source: str) -> BaseDataSourceAdapter:
                 api_key=settings.rest_api_api_key,
                 timeout=settings.rest_api_timeout,
                 cache_ttl_seconds=settings.rest_api_cache_ttl_seconds,
+            )
+        elif data_source == settings.graphql_name:
+            if not settings.graphql_enabled:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"GraphQL 数据源 {data_source} 未启用"
+                )
+            try:
+                headers = json.loads(settings.graphql_headers_json or "{}")
+                if not isinstance(headers, dict):
+                    raise ValueError("GRAPHQL_HEADERS_JSON 必须是 JSON 对象")
+                variables = json.loads(settings.graphql_variables_json or "{}")
+                if not isinstance(variables, dict):
+                    raise ValueError("GRAPHQL_VARIABLES_JSON 必须是 JSON 对象")
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"GraphQL 配置错误: {exc}"
+                )
+
+            ADAPTERS[data_source] = GraphQLAdapter(
+                name=settings.graphql_name,
+                endpoint=settings.graphql_endpoint,
+                table_name=settings.graphql_table_name,
+                query=settings.graphql_query or DEFAULT_COUNTRIES_QUERY,
+                data_path=settings.graphql_data_path,
+                headers={str(key): str(value) for key, value in headers.items()},
+                variables=variables,
+                timeout=settings.graphql_timeout,
+                cache_ttl_seconds=settings.graphql_cache_ttl_seconds,
             )
         else:
             raise HTTPException(

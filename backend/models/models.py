@@ -68,6 +68,7 @@ class ChatResponse(BaseModel):
     insight: Optional[str] = None
     error: Optional[str] = None
     corrected_sql: Optional[str] = None  # 如果有自修复
+    stage_timings: Optional[Dict[str, float]] = None
 
     memory_hit: bool = False
 """

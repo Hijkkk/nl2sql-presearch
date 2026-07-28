@@ -104,7 +104,16 @@ async def root():
         "message": "NL2SQL 智能查询系统运行中",
         "provider": settings.llm_provider,
         "model": settings.llm_model,
-        "supported_data_sources": ["sqlite_demo"],
+        "supported_data_sources": [
+            "sqlite_demo",
+            settings.mysql_query_name,
+            settings.postgres_query_name,
+            settings.gauss_query_name,
+            settings.hive_query_name,
+            settings.dameng_query_name,
+            settings.rest_api_name,
+            settings.graphql_name,
+        ],
         "docs": "/docs"
     }
 

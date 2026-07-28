@@ -1,0 +1,61 @@
+{
+  "summary": {
+    "model_id": "xiyan-sql-3b-ollama",
+    "total": 4,
+    "passed": 3,
+    "pass_rate": 0.75,
+    "avg_wall_time": 5.069,
+    "p50_wall_time": 2.281,
+    "p95_wall_time": 14.825
+  },
+  "cases": [
+    {
+      "id": "sqlite_dept_count",
+      "data_source": "sqlite_demo",
+      "question": "统计每个部门分别有多少名员工。",
+      "passed": true,
+      "success": true,
+      "row_count": 3,
+      "wall_time": 2.142,
+      "sql_contains_ok": true,
+      "sql": "SELECT\n  department_id,\n  COUNT(*) AS num_employees\nFROM employees\nGROUP BY\n  department_id\nLIMIT 1000",
+      "error": null
+    },
+    {
+      "id": "postgres_apple_latest_close",
+      "data_source": "postgres_stock",
+      "question": "苹果公司最新收盘价是多少？",
+      "passed": false,
+      "success": true,
+      "row_count": 0,
+      "wall_time": 14.825,
+      "sql_contains_ok": true,
+      "sql": "SELECT\n  sdp.close_price AS 最新收盘价\nFROM stock_symbols AS ss\nJOIN stock_daily_prices AS sdp\n  ON ss.symbol = sdp.symbol\nWHERE\n  ss.chinese_name = '苹果公司'\nORDER BY\n  sdp.trade_date DESC\nLIMIT 1",
+      "error": null
+    },
+    {
+      "id": "hadoop_city_gmv",
+      "data_source": "hive_hadoop_demo",
+      "question": "按城市统计成交金额最高的城市。",
+      "passed": true,
+      "success": true,
+      "row_count": 1,
+      "wall_time": 1.027,
+      "sql_contains_ok": true,
+      "sql": "SELECT\n  T1.city\nFROM (\n  SELECT\n    T2.city,\n    SUM(T1.gmv) AS total_gmv\n  FROM hadoop_order_events AS T1\n  INNER JOIN hadoop_region_dim AS T2\n    ON T1.region_id = T2.region_id\n  GROUP BY\n    T2.city\n  ORDER BY\n    total_gmv DESC\n  LIMIT 1\n) AS t1",
+      "error": null
+    },
+    {
+      "id": "graphql_continent_count",
+      "data_source": "countries_graphql",
+      "question": "统计每个洲分别有多少个国家。",
+      "passed": true,
+      "success": true,
+      "row_count": 7,
+      "wall_time": 2.281,
+      "sql_contains_ok": true,
+      "sql": "SELECT\n  continent_name,\n  COUNT(*) AS country_count\nFROM countries\nGROUP BY\n  continent_name\nLIMIT 1000",
+      "error": null
+    }
+  ]
+}

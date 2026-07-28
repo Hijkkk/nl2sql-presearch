@@ -1,0 +1,40 @@
+﻿id,data_source,question,passed,success,row_count,wall_time,sql_contains_ok,sql,error
+sqlite_dept_count,sqlite_demo,统计每个部门分别有多少名员工。,True,True,3,2.142,True,"SELECT
+  department_id,
+  COUNT(*) AS num_employees
+FROM employees
+GROUP BY
+  department_id
+LIMIT 1000",
+postgres_apple_latest_close,postgres_stock,苹果公司最新收盘价是多少？,False,True,0,14.825,True,"SELECT
+  sdp.close_price AS 最新收盘价
+FROM stock_symbols AS ss
+JOIN stock_daily_prices AS sdp
+  ON ss.symbol = sdp.symbol
+WHERE
+  ss.chinese_name = '苹果公司'
+ORDER BY
+  sdp.trade_date DESC
+LIMIT 1",
+hadoop_city_gmv,hive_hadoop_demo,按城市统计成交金额最高的城市。,True,True,1,1.027,True,"SELECT
+  T1.city
+FROM (
+  SELECT
+    T2.city,
+    SUM(T1.gmv) AS total_gmv
+  FROM hadoop_order_events AS T1
+  INNER JOIN hadoop_region_dim AS T2
+    ON T1.region_id = T2.region_id
+  GROUP BY
+    T2.city
+  ORDER BY
+    total_gmv DESC
+  LIMIT 1
+) AS t1",
+graphql_continent_count,countries_graphql,统计每个洲分别有多少个国家。,True,True,7,2.281,True,"SELECT
+  continent_name,
+  COUNT(*) AS country_count
+FROM countries
+GROUP BY
+  continent_name
+LIMIT 1000",

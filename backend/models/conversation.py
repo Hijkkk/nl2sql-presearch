@@ -82,6 +82,10 @@ class ConversationCreate(BaseModel):
     model_conf: Optional[dict[str, Any]] = Field(default=None, alias="model_config")
 
 
+class ConversationRename(BaseModel):
+    title: str = Field(..., min_length=1, max_length=255)
+
+
 class ConversationSummary(BaseModel):
     id: str
     title: str

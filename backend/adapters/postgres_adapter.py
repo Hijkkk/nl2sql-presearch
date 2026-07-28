@@ -5,11 +5,13 @@ PostgreSQL / 高斯 数据源适配器
 """
 from datetime import date, datetime
 from decimal import Decimal
+import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger
 
 from .base import BaseDataSourceAdapter
+from backend.config.config import settings
 
 
 class PostgreSQLAdapter(BaseDataSourceAdapter):
@@ -33,6 +35,10 @@ class PostgreSQLAdapter(BaseDataSourceAdapter):
         self.schema = schema or "public"
         self.sslmode = sslmode
         self._conn = None
+        self._metadata_cache: Optional[Dict[str, Any]] = None
+        self._metadata_cache_signature = ""
+        self._metadata_cache_at = 0.0
+        self._metadata_cache_ttl_seconds = float(settings.postgres_metadata_cache_ttl_seconds)
 
     def get_dialect(self) -> str:
         return "postgres"
@@ -73,6 +79,36 @@ class PostgreSQLAdapter(BaseDataSourceAdapter):
     def _reset_connection(self) -> None:
         self.close()
         self._conn = None
+        self.clear_metadata_cache()
+
+    def clear_metadata_cache(self) -> bool:
+        self._metadata_cache = None
+        self._metadata_cache_signature = ""
+        self._metadata_cache_at = 0.0
+        return True
+
+    def warmup_metadata_cache(self) -> Dict[str, Any]:
+        return self.get_metadata()
+
+    def metadata_cache_status(self) -> Dict[str, Any]:
+        now = time.time()
+        age_seconds = max(0.0, now - self._metadata_cache_at) if self._metadata_cache else None
+        expires_in_seconds = (
+            max(0.0, self._metadata_cache_ttl_seconds - age_seconds)
+            if age_seconds is not None
+            else None
+        )
+        return {
+            "data_source": self.name,
+            "supported": True,
+            "cached": self._metadata_cache is not None,
+            "schema": self.schema,
+            "schema_signature": self._metadata_cache_signature,
+            "cache_age_seconds": round(age_seconds, 3) if age_seconds is not None else None,
+            "ttl_seconds": self._metadata_cache_ttl_seconds,
+            "expires_in_seconds": round(expires_in_seconds, 3) if expires_in_seconds is not None else None,
+            "total_tables": (self._metadata_cache or {}).get("total_tables"),
+        }
 
     def ping(self) -> None:
         try:
@@ -87,6 +123,19 @@ class PostgreSQLAdapter(BaseDataSourceAdapter):
 
     def get_metadata(self) -> Dict[str, Any]:
         conn = self._get_connection()
+        now = time.time()
+        # 热路径直接使用完整元数据缓存，避免每次对 information_schema 做全量扫描。
+        if self._metadata_cache is not None and now - self._metadata_cache_at <= self._metadata_cache_ttl_seconds:
+            return self._metadata_cache
+
+        signature = self._get_schema_signature(conn)
+        if (
+            self._metadata_cache is not None
+            and self._metadata_cache_signature == signature
+            and now - self._metadata_cache_at <= self._metadata_cache_ttl_seconds
+        ):
+            return self._metadata_cache
+
         tables: List[Dict[str, Any]] = []
 
         with conn.cursor() as cursor:
@@ -182,14 +231,57 @@ class PostgreSQLAdapter(BaseDataSourceAdapter):
                 tables.append(
                     {
                         "name": table_name,
-                        "comment": f"{self.schema}.{table_name}",
+                        "comment": self._table_comment(table_name),
                         "columns": columns,
                         "primary_key": primary_key,
                         "foreign_keys": foreign_keys,
                     }
                 )
 
-        return {"tables": tables, "total_tables": len(tables)}
+        metadata = {
+            "tables": tables,
+            "total_tables": len(tables),
+            "schema_signature": signature,
+            "schema": self.schema,
+        }
+        self._metadata_cache = metadata
+        self._metadata_cache_signature = signature
+        self._metadata_cache_at = now
+        return metadata
+
+    def _get_schema_signature(self, conn) -> str:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT
+                    c.table_name,
+                    c.column_name,
+                    c.data_type,
+                    c.udt_name,
+                    c.is_nullable,
+                    c.column_default
+                FROM information_schema.columns c
+                JOIN information_schema.tables t
+                  ON t.table_schema = c.table_schema
+                 AND t.table_name = c.table_name
+                WHERE c.table_schema = %s
+                  AND t.table_type = 'BASE TABLE'
+                ORDER BY c.table_name, c.ordinal_position
+                """,
+                (self.schema,),
+            )
+            parts = [
+                "|".join(str(row.get(key) or "") for key in (
+                    "table_name",
+                    "column_name",
+                    "data_type",
+                    "udt_name",
+                    "is_nullable",
+                    "column_default",
+                ))
+                for row in cursor.fetchall()
+            ]
+        return "\n".join(parts)
 
     def execute_query(self, sql: str, params: Optional[Dict] = None) -> Tuple[List[Dict], List[str]]:
         return self._execute_query_once(sql, params, retry=True)
@@ -231,8 +323,43 @@ class PostgreSQLAdapter(BaseDataSourceAdapter):
                 {"column": "order_id", "ref_table": "orders", "ref_column": "id"},
                 {"column": "product_id", "ref_table": "products", "ref_column": "id"},
             ],
+            "stock_daily_prices": [
+                {"column": "symbol", "ref_table": "stock_symbols", "ref_column": "symbol"},
+            ],
+            "stock_corporate_actions": [
+                {"column": "symbol", "ref_table": "stock_symbols", "ref_column": "symbol"},
+            ],
+            "stock_symbols": [
+                {"column": "sic_code", "ref_table": "stock_industry_classification", "ref_column": "sic_code"},
+            ],
         }
         return relations.get(table_name, [])
+
+    def _table_comment(self, table_name: str) -> str:
+        stock_comments = {
+            "stock_daily_prices": (
+                "股票日行情事实表，按 symbol + trade_date 存储开盘、最高、最低、收盘、成交量等价格数据。"
+                "当用户使用股票中文名、公司名或问“今天/最新收盘价”时，应 JOIN stock_symbols ON stock_daily_prices.symbol = stock_symbols.symbol。"
+            ),
+            "stock_symbols": (
+                "股票证券主数据维表，包含 symbol、security_name、chinese_name、交易所、发行类型、SIC 行业代码等。"
+                "中文公司名如“苹果公司”应匹配 chinese_name 或 security_name，再关联行情、ETP 或行业表。"
+            ),
+            "stock_etp_metadata": (
+                "ETF/ETP 扩展属性表，包含 etp_type、leveraged_flag、leveraged_ratio、inverse_flag、underlying_asset。"
+                "查询杠杆 ETF/反向 ETF 时应 JOIN stock_symbols 获取名称，并用 leveraged_flag/inverse_flag 判断。"
+            ),
+            "stock_industry_classification": (
+                "SIC 行业分类维表，sic_code 为主键，parent_sic_code 自关联到 sic_code，支持行业树、上级行业、子行业递归 CTE 查询。"
+            ),
+            "stock_corporate_actions": (
+                "股票公司行为表，记录拆股、更名等 action_type、effective_date、old_value/new_value。"
+                "应通过 symbol JOIN stock_symbols 获取证券名称。"
+            ),
+            "stock_daily_prices_staging": "股票行情导入暂存表，仅用于数据清洗，不优先用于业务查询。",
+            "stock_daily_prices_backup": "股票行情备份表，仅用于备份核对，不优先用于业务查询。",
+        }
+        return stock_comments.get(table_name, f"{self.schema}.{table_name}")
 
     def _column_comment(self, table_name: str, column_name: str) -> str:
         ecommerce_comments = {
@@ -272,6 +399,73 @@ class PostgreSQLAdapter(BaseDataSourceAdapter):
         }
         if table_name in ecommerce_comments:
             return ecommerce_comments.get(table_name, {}).get(column_name, "")
+
+        stock_core_comments = {
+            "stock_daily_prices": {
+                "id": "主键ID",
+                "symbol": "股票代码，关联 stock_symbols.symbol；如果用户用中文名/公司名提问，应先 JOIN stock_symbols",
+                "exchange_code": "交易所代码，例如 NASDAQ、NYSE、AMEX",
+                "trade_date": "交易日期；用户说今天/最新时通常应 ORDER BY trade_date DESC LIMIT 1",
+                "open_price": "开盘价，建议查询结果别名为 开盘价",
+                "high_price": "最高价，建议查询结果别名为 最高价",
+                "low_price": "最低价，建议查询结果别名为 最低价",
+                "close_price": "收盘价，建议查询结果别名为 收盘价",
+                "volume": "成交量，建议查询结果别名为 成交量",
+                "volume_weighted_avg_price": "成交量加权平均价 VWAP",
+                "trade_count": "成交笔数",
+                "previous_close": "前收盘价，可用于计算涨跌额和涨跌幅",
+                "created_at": "入库时间",
+                "updated_at": "更新时间",
+            },
+            "stock_corporate_actions": {
+                "id": "公司行为记录ID",
+                "symbol": "股票代码，关联 stock_symbols.symbol",
+                "action_type": "公司行为类型，例如 split、rename、dividend 等",
+                "effective_date": "公司行为生效日期",
+                "old_value": "变更前取值，例如旧代码或旧名称",
+                "new_value": "变更后取值，例如新代码或新名称",
+                "description": "公司行为说明",
+                "created_at": "入库时间",
+            },
+            "stock_symbols": {
+                "symbol": "股票代码/证券代码，主键，可关联 stock_daily_prices.symbol、stock_etp_metadata.symbol、stock_corporate_actions.symbol",
+                "security_name": "证券英文名称/公司英文名称",
+                "chinese_name": "证券中文名称/公司中文名，例如 苹果公司；中文提问应优先用此字段匹配",
+                "exchange_code": "交易所代码，例如 NASDAQ、NYSE、AMEX",
+                "market_category": "市场分类",
+                "test_issue": "是否测试证券",
+                "financial_status": "财务状态",
+                "round_lot_size": "标准交易单位",
+                "country_of_incorporation": "注册地国家/地区",
+                "ipo_flag": "是否 IPO 相关证券",
+                "issue_type": "证券发行类型",
+                "sub_issue_type": "证券子类型",
+                "sic_code": "SIC 行业代码，关联 stock_industry_classification.sic_code",
+                "first_trade_date": "首个交易日期",
+                "is_active": "是否仍活跃交易",
+                "created_at": "入库时间",
+                "updated_at": "更新时间",
+            },
+            "stock_etp_metadata": {
+                "symbol": "ETF/ETP 代码，主键，关联 stock_symbols.symbol",
+                "etp_type": "ETP 类型，例如 ETF、ETN 等",
+                "leveraged_flag": "是否杠杆 ETP/ETF；查询杠杆 ETF 时应过滤 leveraged_flag = true",
+                "leveraged_ratio": "杠杆倍数，例如 2、3",
+                "inverse_flag": "是否反向 ETP/ETF",
+                "underlying_asset": "跟踪的底层资产或指数",
+                "luld_tier": "LULD 分层",
+            },
+            "stock_industry_classification": {
+                "sic_code": "SIC 行业代码，主键，例如 3571",
+                "sic_name": "SIC 行业英文名称",
+                "chinese_name": "SIC 行业中文名称",
+                "division": "SIC 大门类",
+                "major_group": "SIC 主组",
+                "parent_sic_code": "上级 SIC 代码，自关联 stock_industry_classification.sic_code；树形查询使用递归 CTE",
+            },
+        }
+        if table_name in stock_core_comments:
+            return stock_core_comments.get(table_name, {}).get(column_name, "")
 
         stock_comments = {
             "stock_daily_prices": {

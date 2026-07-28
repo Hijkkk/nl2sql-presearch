@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.crud import conversation as conversation_crud
 from backend.config.database import get_db
-from backend.models.conversation import ConversationCreate
+from backend.models.conversation import ConversationCreate, ConversationRename
 from backend.models.user import ApiResponse, User
 from backend.routers.user import get_current_user
 
@@ -90,6 +90,24 @@ async def get_conversation(
         message="success",
         data=conversation.model_dump(),
     )
+
+
+@router.put("/{conversation_id}", response_model=ApiResponse)
+async def rename_conversation(
+    conversation_id: str,
+    payload: ConversationRename,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse:
+    conversation = await conversation_crud.rename_conversation(
+        db=db,
+        user_id=current_user.id,
+        conversation_id=conversation_id,
+        title=payload.title,
+    )
+    if not conversation:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="会话不存在")
+    return ApiResponse(code=200, message="重命名成功", data=conversation.model_dump())
 
 
 @router.delete("/{conversation_id}", response_model=ApiResponse)

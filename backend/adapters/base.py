@@ -75,6 +75,22 @@ class BaseDataSourceAdapter(ABC):
         """
         pass
 
+    def clear_metadata_cache(self) -> bool:
+        """Clear metadata cache when the adapter supports it."""
+        return False
+
+    def warmup_metadata_cache(self) -> Dict[str, Any]:
+        """Build metadata cache by reading metadata once."""
+        return self.get_metadata()
+
+    def metadata_cache_status(self) -> Dict[str, Any]:
+        """Return a minimal cache status for management endpoints."""
+        return {
+            "data_source": self.name,
+            "supported": False,
+            "cached": False,
+        }
+
     def validate_only_select(self, sql: str) -> bool:
         """
         【核心安全方法】使用 sqlglot 严格验证是否为只读查询

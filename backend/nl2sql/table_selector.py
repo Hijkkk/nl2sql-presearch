@@ -143,9 +143,56 @@ def select_relevant_tables(
     # [:max_tables] → 最多取前 max_tables 个（默认 5 个）
     selected = [name for name, score in sorted_tables if score > 0][:max_tables]
     
+    hadoop_tables = [
+        "hadoop_order_events",
+        "hadoop_user_profiles",
+        "hadoop_product_dim",
+        "hadoop_region_dim",
+    ]
+    available_hadoop_tables = [name for name in hadoop_tables if name in {t["name"] for t in tables}]
+    hadoop_keywords = (
+        "hadoop", "hdfs", "订单", "销售", "成交", "gmv", "金额", "城市", "省份",
+        "用户", "vip", "商品", "品牌", "品类", "销量", "月", "趋势", "大区"
+    )
+    if available_hadoop_tables and (
+        any(table_name in selected for table_name in available_hadoop_tables)
+        or any(keyword in question_lower for keyword in hadoop_keywords)
+    ):
+        selected = list(dict.fromkeys(available_hadoop_tables + selected))[:max_tables]
+
+    police_table_groups = {
+        "addr_alias": ("别名", "曾用名", "民间称呼", "地址别名", "包含"),
+        "addr_standard_address": ("标准地址", "完整地址", "地址", "经度", "纬度", "街道", "社区"),
+        "person_basic": ("人员", "人口", "姓名", "曾用名", "证件", "户籍"),
+        "person_address_relation": ("住址", "居住", "当前住", "人房", "租住", "房屋"),
+        "house_info": ("房屋", "出租", "自住", "空置", "产权人", "危险房屋"),
+        "police_alert": ("警情", "报警", "接警", "报警内容", "案发", "民警"),
+        "alert_caller": ("报警人", "来电人", "实名报警", "目击者"),
+        "alert_address_relation": ("案发地", "报警地址", "嫌疑人藏身地", "涉及地址"),
+        "organization_info": ("单位", "组织", "企业", "法人", "行业"),
+        "organization_address_relation": ("单位地址", "经营地址", "注册地址"),
+    }
+    available_police_tables = {table["name"] for table in tables}
+    police_selected = [
+        table_name
+        for table_name, keywords in police_table_groups.items()
+        if table_name in available_police_tables and any(keyword in question_lower for keyword in keywords)
+    ]
+    if police_selected:
+        police_priority: list[str] = []
+        if any(keyword in question_lower for keyword in ("人员", "人口", "姓名", "当前住", "住址", "居住")):
+            police_priority.extend(["person_basic", "person_address_relation", "house_info", "addr_standard_address"])
+        elif any(keyword in question_lower for keyword in ("报警", "警情", "接警", "报警内容", "案发")):
+            police_priority.extend(["police_alert", "alert_address_relation", "alert_caller"])
+        elif any(keyword in question_lower for keyword in ("别名", "曾用名", "民间称呼", "地址别名")):
+            police_priority.extend(["addr_alias", "addr_standard_address"])
+        police_priority = [table_name for table_name in police_priority if table_name in available_police_tables]
+        selected = list(dict.fromkeys(police_priority + police_selected + selected))[:max_tables]
+
     # 如果一个都没匹配到，就返回所有表（保底）
     if not selected:
         selected = [t["name"] for t in tables][:max_tables]
     
     logger.info(f"表选择结果: {selected} (原始表数: {len(tables)})")
     return selected
+

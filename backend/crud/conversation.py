@@ -1,4 +1,5 @@
 """Async CRUD functions for conversation history."""
+from datetime import datetime, timedelta
 from typing import Optional
 from uuid import uuid4
 
@@ -6,6 +7,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from backend.config.config import settings
 from backend.models.conversation import (
     Conversation,
     ConversationCreate,
@@ -33,29 +35,33 @@ def to_summary(conversation: Conversation) -> ConversationSummary:
 
 
 def to_message_out(message: ConversationMessage) -> ConversationMessageOut:
+    show_debug = settings.nl2sql_debug_output
     return ConversationMessageOut(
         id=message.id,
         role=message.role,
         content=message.content,
-        sql=message.sql_text,
+        sql=message.sql_text if show_debug else None,
         columns=message.columns_json,
         results=message.results_json,
         row_count=message.row_count,
-        execution_time=message.execution_time,
-        insight=message.insight,
+        execution_time=message.execution_time if show_debug else None,
+        insight=message.insight if show_debug else None,
         success=message.success,
-        error=message.error_message,
+        error=message.error_message if show_debug else None,
         created_at=message.created_at,
     )
 
 
 def to_detail(conversation: Conversation) -> ConversationDetail:
-    # 排序依据：每条消息的 created_at 时间
-    messages = sorted(conversation.messages, key=lambda item: item.created_at)
+    # SQLite 的 CURRENT_TIMESTAMP 精度只有秒；同一轮问答相同时间时，用户消息必须在 AI 消息前。
+    messages = sorted(
+        conversation.messages,
+        key=lambda item: (item.created_at, 0 if item.role == "user" else 1),
+    )
     return ConversationDetail(
         **to_summary(conversation).model_dump(),
         model_conf=conversation.model_config,
-        last_sql=conversation.last_sql,
+        last_sql=conversation.last_sql if settings.nl2sql_debug_output else None,
         messages=[to_message_out(message) for message in messages],
     )
 # {
@@ -249,6 +255,26 @@ async def delete_conversation(
     return bool(result.rowcount)
 
 
+async def rename_conversation(
+    db: AsyncSession,
+    user_id: int,
+    conversation_id: str,
+    title: str,
+) -> Optional[ConversationSummary]:
+    conversation = await db.scalar(
+        select(Conversation).where(
+            Conversation.id == conversation_id,
+            Conversation.user_id == user_id,
+        )
+    )
+    if not conversation:
+        return None
+    conversation.title = title.strip()
+    await db.commit()
+    await db.refresh(conversation)
+    return to_summary(conversation)
+
+
 async def save_chat_exchange(
     db: AsyncSession,
     user_id: int,
@@ -295,6 +321,7 @@ async def save_chat_exchange(
         user_id=user_id,
         role="user",
         content=question,
+        created_at=datetime.now(),
     )
     ai_message = ConversationMessage(
         id=_new_id("msg"),
@@ -310,6 +337,7 @@ async def save_chat_exchange(
         insight=insight,
         success=success,
         error_message=error,
+        created_at=datetime.now() + timedelta(microseconds=1),
     )
     db.add_all([user_message, ai_message])
 

@@ -7,6 +7,7 @@ SQL 安全守卫 - 使用 sqlglot 进行严格的只读验证
     提供 sanitize_for_execution 方法，自动给 SQL 加 LIMIT 保护
 """
 import sqlglot
+import re
 from loguru import logger
 from typing import Optional, Tuple
 
@@ -19,6 +20,10 @@ class QueryGuard:
         'INSERT', 'UPDATE', 'DELETE', 'DROP', 'ALTER', 'CREATE', 'TRUNCATE',
         'GRANT', 'REVOKE', 'EXEC', 'EXECUTE', 'MERGE', 'REPLACE'
     }
+    DANGEROUS_KEYWORD_PATTERN = re.compile(
+        r"\b(" + "|".join(sorted(DANGEROUS_KEYWORDS)) + r")\b",
+        re.IGNORECASE,
+    )
 
     @staticmethod
     def validate_read_only(sql: str, dialect: str = "sqlite") -> Tuple[bool, Optional[str]]:
@@ -31,10 +36,10 @@ class QueryGuard:
 
         sql_upper = sql.upper().strip()
 
-        # 第一道防线：快速关键字检查 遍历sql语句核对
-        for kw in QueryGuard.DANGEROUS_KEYWORDS:
-            if kw in sql_upper:
-                return False, f"检测到危险关键字: {kw}，系统只允许 SELECT 查询"
+        # 第一道防线：快速关键字检查。按词边界匹配，避免误伤 updated_at 等正常字段。
+        match = QueryGuard.DANGEROUS_KEYWORD_PATTERN.search(sql_upper)
+        if match:
+            return False, f"检测到危险关键字: {match.group(1).upper()}，系统只允许 SELECT 查询"
 
         try:
             # 使用 sqlglot 解析为 AST（抽象语法树）

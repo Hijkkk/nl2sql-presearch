@@ -1,0 +1,4 @@
+{"id":"sqlite_dept_count","data_source":"sqlite_demo","question":"统计每个部门分别有多少名员工。","expected_success":true,"expected_sql_contains":["SELECT","GROUP BY"],"min_rows":1}
+{"id":"postgres_apple_latest_close","data_source":"postgres_stock","question":"苹果公司最新收盘价是多少？","expected_success":true,"expected_sql_contains":["stock_daily_prices","close_price"],"min_rows":1}
+{"id":"hadoop_city_gmv","data_source":"hive_hadoop_demo","question":"按城市统计成交金额最高的城市。","expected_success":true,"expected_sql_contains":["hadoop_order_events","hadoop_region_dim"],"min_rows":1}
+{"id":"graphql_continent_count","data_source":"countries_graphql","question":"统计每个洲分别有多少个国家。","expected_success":true,"expected_sql_contains":["continent"],"min_rows":1}

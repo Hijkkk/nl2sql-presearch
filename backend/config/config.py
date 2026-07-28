@@ -38,11 +38,41 @@ class Settings(BaseSettings):
     litellm_base_url: str = Field(default="http://192.168.0.159:4000", alias="ANTHROPIC_BASE_URL")
     litellm_api_key: str = Field(default="", alias="ANTHROPIC_AUTH_TOKEN")
     litellm_model: str = Field(default="Qwen3-Coder-Next-FP8", alias="ANTHROPIC_MODEL")
+    llm_timeout: float = Field(default=60.0, alias="LLM_TIMEOUT")
+    sql_generation_cache_seconds: int = Field(default=600, alias="SQL_GENERATION_CACHE_SECONDS")
+    nl2sql_debug_output: bool = Field(default=True, alias="NL2SQL_DEBUG_OUTPUT")
 
     # ==================== 阿里云 DashScope 配置（备用） ====================
     dashscope_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    dashscope_api_key: str = os.getenv("DASHSCOPE_API_KEY", "")
-    dashscope_model: str = "qwen3.7-plus"
+    dashscope_api_key: str = Field(default="", alias="DASHSCOPE_API_KEY")
+    dashscope_model: str = Field(default="qwen3.7-max", alias="DASHSCOPE_MODEL")
+
+
+    # ==================== 本地 XiYanSQL 3B 配置（≤7B 课题约束） ====================
+    xiyan_sql_3b_enabled: bool = Field(default=True, alias="XIYAN_SQL_3B_ENABLED")
+    xiyan_sql_3b_base_url: str = Field(default="http://127.0.0.1:8010/v1", alias="XIYAN_SQL_3B_BASE_URL")
+    xiyan_sql_3b_api_key: str = Field(default="", alias="XIYAN_SQL_3B_API_KEY")
+    xiyan_sql_3b_model: str = Field(default="XiYanSQL-QwenCoder-3B-2504", alias="XIYAN_SQL_3B_MODEL")
+    xiyan_sql_3b_model_path: str = Field(
+        default=r"Z:\python\Projects\task\datasources\XiYanSQL-QwenCoder-3b\XiYanSQL-QwenCoder-3B-2504",
+        alias="XIYAN_SQL_3B_MODEL_PATH",
+    )
+
+    # ==================== 本地 XiYanSQL 3B：Ollama 量化版 ====================
+    xiyan_ollama_enabled: bool = Field(default=True, alias="XIYAN_OLLAMA_ENABLED")
+    xiyan_ollama_base_url: str = Field(default="http://127.0.0.1:11434/v1", alias="XIYAN_OLLAMA_BASE_URL")
+    xiyan_ollama_api_key: str = Field(default="ollama", alias="XIYAN_OLLAMA_API_KEY")
+    xiyan_ollama_model: str = Field(default="xiyansql-3b", alias="XIYAN_OLLAMA_MODEL")
+
+    # ==================== 本地 XiYanSQL 3B：训练/微调服务版 ====================
+    xiyan_finetune_enabled: bool = Field(default=True, alias="XIYAN_FINETUNE_ENABLED")
+    xiyan_finetune_base_url: str = Field(default="http://127.0.0.1:8010/v1", alias="XIYAN_FINETUNE_BASE_URL")
+    xiyan_finetune_api_key: str = Field(default="", alias="XIYAN_FINETUNE_API_KEY")
+    xiyan_finetune_model: str = Field(default="XiYanSQL-QwenCoder-3B-2504", alias="XIYAN_FINETUNE_MODEL")
+    xiyan_finetune_model_path: str = Field(
+        default=r"Z:\python\Projects\task\datasources\XiYanSQL-QwenCoder-3b\XiYanSQL-QwenCoder-3B-2504",
+        alias="XIYAN_FINETUNE_MODEL_PATH",
+    )
 
     # ==================== 数据源配置 ====================
     default_data_source: str = "sqlite_demo"
@@ -105,6 +135,7 @@ class Settings(BaseSettings):
         default="./data/metadata_summaries.json",
         alias="METADATA_SUMMARY_CACHE_PATH",
     )
+    postgres_metadata_cache_ttl_seconds: float = Field(default=60.0, alias="POSTGRES_METADATA_CACHE_TTL_SECONDS")
 
     # ==================== REST API 查询数据源配置 ====================
     rest_api_enabled: bool = Field(default=False, alias="REST_API_ENABLED")
@@ -120,6 +151,25 @@ class Settings(BaseSettings):
     rest_api_timeout: float = Field(default=10.0, alias="REST_API_TIMEOUT")
     rest_api_cache_ttl_seconds: float = Field(default=60.0, alias="REST_API_CACHE_TTL_SECONDS")
     rest_api_service_mode: str = Field(default="table", alias="REST_API_SERVICE_MODE")
+
+    # ==================== GraphQL 查询数据源配置 ====================
+    graphql_enabled: bool = Field(default=True, alias="GRAPHQL_ENABLED")
+    graphql_name: str = Field(default="countries_graphql", alias="GRAPHQL_NAME")
+    graphql_endpoint: str = Field(
+        default="https://countries.trevorblades.com/graphql",
+        alias="GRAPHQL_ENDPOINT",
+    )
+    graphql_table_name: str = Field(default="countries", alias="GRAPHQL_TABLE_NAME")
+    graphql_data_path: str = Field(default="data.countries", alias="GRAPHQL_DATA_PATH")
+    graphql_headers_json: str = Field(default="{}", alias="GRAPHQL_HEADERS_JSON")
+    graphql_variables_json: str = Field(default="{}", alias="GRAPHQL_VARIABLES_JSON")
+    graphql_query: str = Field(default="", alias="GRAPHQL_QUERY")
+    graphql_timeout: float = Field(default=10.0, alias="GRAPHQL_TIMEOUT")
+    graphql_cache_ttl_seconds: float = Field(default=3600.0, alias="GRAPHQL_CACHE_TTL_SECONDS")
+    graphql_description: str = Field(
+        default="公开 Countries GraphQL 国家数据源（国家、首都、货币、洲、语言）",
+        alias="GRAPHQL_DESCRIPTION",
+    )
 
     # ==================== PostgreSQL 查询数据源配置 ====================
     postgres_query_enabled: bool = Field(default=False, alias="POSTGRES_QUERY_ENABLED")
@@ -156,6 +206,9 @@ class Settings(BaseSettings):
     hive_query_database: str = Field(default="default", alias="HIVE_QUERY_DATABASE")
     hive_query_auth: str = Field(default="NOSASL", alias="HIVE_QUERY_AUTH")
     hive_query_description: str = Field(default="Hive/Hadoop 数仓数据源", alias="HIVE_QUERY_DESCRIPTION")
+    hive_query_mode: str = Field(default="server", alias="HIVE_QUERY_MODE")
+    hive_demo_csv_path: str = Field(default="./data/hadoop_order_events.csv", alias="HIVE_DEMO_CSV_PATH")
+    hive_demo_data_dir: str = Field(default="./data/hadoop", alias="HIVE_DEMO_DATA_DIR")
 
     # ==================== 达梦数据库查询数据源配置 ====================
     dameng_query_enabled: bool = Field(default=False, alias="DAMENG_QUERY_ENABLED")
@@ -186,7 +239,8 @@ class Settings(BaseSettings):
     是否触发了自纠错
     操作时间、耗时等
     """
-    audit_db_path: str = "AUDIT_DB_PATH"
+    audit_db_path: str = Field(default="data/audit.db", alias="AUDIT_DB_PATH")
+    audit_result_sample_rows: int = Field(default=50, alias="AUDIT_RESULT_SAMPLE_ROWS")
 
     # ==================== CORS ====================
     # 允许所有的源 域名列表
@@ -236,3 +290,4 @@ if __name__ == "__main__":
     print(f"   当前模型      : {settings.llm_model}")
     print(f"   Base URL      : {settings.llm_base_url}")
     print(f"   API Key 已配置: {'是' if settings.llm_api_key else '否'}")
+

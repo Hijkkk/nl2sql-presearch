@@ -276,11 +276,15 @@ class MetadataSummarizer:
         use_llm: bool = True,
     ) -> Dict[str, Any]:
         """
-        为整个 metadata 生成摘要版本
-        返回类似原 metadata 但每个表有 'summary' 字段，columns 精简
+        为整个 metadata 生成摘要版本，返回类似原 metadata 但每个表有 'summary' 字段，columns 精简
+        :param metadata:
+        :param data_source:
+        :param refresh:
+        :param use_llm:
+        :return:
         """
         summarized = {"tables": [], "total_tables": metadata.get("total_tables", 0)}
-        
+
         for table in metadata.get("tables", []):
             table_name = table["name"]
             summary = await self.summarize_table(
@@ -303,7 +307,7 @@ class MetadataSummarizer:
                 if col.get("comment"):
                     slim_col["comment"] = col["comment"]
                 slim_columns.append(slim_col)
-            
+
             summarized_table = {
                 "name": table_name,
                 "comment": table.get("comment", ""),
@@ -313,7 +317,29 @@ class MetadataSummarizer:
                 "foreign_keys": table.get("foreign_keys", [])
             }
             summarized["tables"].append(summarized_table)
-        
+        # {
+        #   "total_tables": 3,
+        #   "tables": [
+        #     {
+        #       "name": "employees",
+        #       "comment": "员工信息表，包含自关联经理关系",
+        #       "summary": "员工信息表存储员工基本资料及组织关系，其中 manager_id 自关联指向其直属经理，department_id 关联所属部门，salary 和 hire_date 分别记录薪资与入职时间。",
+        #       "columns": [
+        #         {"name": "id", "type": "INTEGER", "comment": "员工ID"},
+        #         {"name": "name", "type": "TEXT", "comment": "姓名"},
+        #         {"name": "department_id", "type": "INTEGER"},
+        #         {"name": "manager_id", "type": "INTEGER"},
+        #         {"name": "salary", "type": "REAL"},
+        #         {"name": "hire_date", "type": "DATE"}
+        #       ],
+        #       "primary_key": ["id"],
+        #       "foreign_keys": [
+        #         {"column": "department_id", "ref_table": "departments", "ref_column": "id"}
+        #       ]
+        #     },
+        #      ....
+        #   ]
+        # }
         return summarized
 
     # 根据表名查找缓存中的摘要。
