@@ -1,6 +1,7 @@
 import time
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.encoders import jsonable_encoder
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.crud import conversation as conversation_crud
@@ -33,11 +34,9 @@ def response_for_client(response: ChatResponse) -> ChatResponse:
     return response.model_copy(
         update={
             "sql": None,
-            "execution_time": None,
             "llm_thought": None,
             "insight": None,
             "corrected_sql": None,
-            "stage_timings": None,
         }
     )
 
@@ -289,6 +288,8 @@ async def chat(
     dialect = adapter.get_dialect()
     # 定义了一个内部函数 persist_response，作用是把每次对话保存到数据库（会话历史记录）
     async def persist_response(response: ChatResponse) -> ChatResponse:
+        response.columns = jsonable_encoder(response.columns)
+        response.results = jsonable_encoder(response.results)
         try:
             conversation_id, message_id = await conversation_crud.save_chat_exchange(
                 db=db,
@@ -337,6 +338,10 @@ async def chat(
                     model_id=request.model_id,  # 6. 使用的 LLM 模型 ID
                     model_config=request.model_conf,  # 7. 模型的完整配置参数
                 )
+            # 准备用于审计日志的结果样本
+            # 限制存储大小 - 不把所有结果都存进审计数据库
+            # 收集列名 - 记录结果的字段结构
+            # 标记是否截断 - 知道结果被裁剪了
             result_columns, result_sample, result_truncated = prepare_result_sample(
                 response.columns or [],
                 response.results or [],
@@ -404,6 +409,7 @@ async def chat(
             "model_id": request.model_id,
             "raw_model_output": generation_trace.get("raw_model_output", ""),
             "llm_thought": generation_trace.get("llm_thought", thought),
+            "prompt_template": generation_trace.get("prompt_template", ""),
             "generation_cache_hit": bool(generation_trace.get("generation_cache_hit")),
         }
         # 2.1. SQL 生成报错 记录日志 返回
@@ -423,7 +429,9 @@ async def chat(
                 success=False,
                 question=request.question,
                 error=f"SQL生成失败: {gen_error}",
-                llm_thought=thought
+                execution_time=round(time.time() - start_time, 3),
+                llm_thought=thought,
+                stage_timings={**audit_context["stage_timings"], "total": round(time.time() - start_time, 3)},
             ))
 
         # 3. 安全验证（核心！）
@@ -447,7 +455,9 @@ async def chat(
                 question=request.question,
                 sql=sql,
                 error=f"安全拦截: {validation_error}",
-                llm_thought=thought
+                execution_time=round(time.time() - start_time, 3),
+                llm_thought=thought,
+                stage_timings={**audit_context["stage_timings"], "total": round(time.time() - start_time, 3)},
             ))
 
         # 4. 执行查询
@@ -504,7 +514,7 @@ async def chat(
                 results=results,
                 columns=columns,
                 row_count=row_count,
-                execution_time=round(time.time() - start_time, 2),
+                execution_time=round(time.time() - start_time, 3),
                 llm_thought=thought,
                 insight=insight,
                 answer=answer,
@@ -539,10 +549,21 @@ async def chat(
                             results2, cols2 = adapter.execute_query(corrected_sql)
                             correction_database_seconds = time.perf_counter() - correction_database_started
                             exec_time = time.time() - start_time
+                            summary_started = time.perf_counter()
+                            answer2 = await sql_generator.summarize_result(
+                                request.question,
+                                cols2,
+                                results2,
+                                answer_template=(request.model_conf or {}).get("answer_template", "brief"),
+                                custom_instruction=(request.model_conf or {}).get("custom_instruction", ""),
+                                model_id=request.model_id,
+                                model_config=request.model_conf,
+                            )
+                            summary_seconds = time.perf_counter() - summary_started
                             stage_timings = {
                                 **audit_context["stage_timings"],
                                 "database": round(database_seconds + correction_database_seconds, 3),
-                                "result_summary": 0.0,
+                                "result_summary": round(summary_seconds, 3),
                                 "total": round(exec_time, 3),
                             }
                             result_columns, result_sample, result_truncated = prepare_result_sample(cols2, results2)
@@ -569,10 +590,11 @@ async def chat(
                                 results=results2,
                                 columns=cols2,
                                 row_count=len(results2),
-                                execution_time=round(exec_time, 2),
+                                execution_time=round(exec_time, 3),
                                 llm_thought=thought + "\n[自修复] " + correction_thought,
                                 corrected_sql=corrected_sql,
-                                insight="已自动修复SQL并成功执行",
+                                answer=answer2,
+                                insight=answer2 or "已自动修复 SQL 并成功执行。",
                                 stage_timings=stage_timings,
                             ))
                     except Exception:
@@ -605,6 +627,7 @@ async def chat(
                 sql=sql,
                 error=f"查询执行失败: {str(exec_error)}",
                 llm_thought=thought,
+                execution_time=round(time.time() - start_time, 3),
                 stage_timings=stage_timings,
             ))
 
@@ -626,7 +649,9 @@ async def chat(
         return await persist_response(ChatResponse(
             success=False,
             question=request.question,
-            error=f"系统异常: {str(e)}"
+            error=f"系统异常: {str(e)}",
+            execution_time=round(time.time() - start_time, 3),
+            stage_timings={"total": round(time.time() - start_time, 3)},
         ))
 
 

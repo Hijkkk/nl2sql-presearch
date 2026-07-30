@@ -4,6 +4,7 @@ Prompt 构建器 - 让小模型 / 公司内部模型也能较好完成复杂 NL2
 """
 from typing import Dict, List, Any
 from loguru import logger
+from backend.nl2sql.catalog import catalog_prompt_hint
 
 
 class PromptBuilder:
@@ -22,6 +23,7 @@ class PromptBuilder:
         }
 
     def _few_shots_for(self, data_source: str) -> str:
+        # 默认是通用提示词
         return self.few_shot_by_source.get(data_source, self._build_few_shot_examples())
 
     def _build_graphql_few_shot_examples(self) -> str:
@@ -273,15 +275,15 @@ ORDER BY p.brand, 月份;
 
 ## 示例10：警务地址库中同名词的消歧
 问题：查询包含张三的地址别名记录
-元数据：addr_alias(alias_name, std_address_id), addr_standard_address(std_address_id, full_address)
+元数据：addr_alias(alias_name, std_address_code), addr_standard_address(std_address_code, full_address)
 ```sql
 SELECT
     aa.alias_name AS 地址别名,
     sa.full_address AS 标准地址
 FROM addr_alias aa
-JOIN addr_standard_address sa ON aa.std_address_id = sa.std_address_id
+JOIN addr_standard_address sa ON aa.std_address_code = sa.std_address_code
 WHERE aa.alias_name LIKE '%张三%'
-ORDER BY aa.id DESC
+ORDER BY aa.alias_id DESC
 LIMIT 100;
 ```
 
@@ -320,6 +322,11 @@ WHERE alert_content LIKE '%张三%';
         relevant_tables: 如果已做表选择，只传入相关表元数据（推荐！减少token）
         """
         schema_text = self._format_metadata(metadata, relevant_tables)
+        catalog_hint = catalog_prompt_hint(
+            data_source,
+            [table.get("name", "") for table in metadata.get("tables", [])],
+        )
+        catalog_section = f"\n## Catalog hints\n{catalog_hint}\n" if catalog_hint else ""
 
         prompt = f"""{self.system_prompt}
 
@@ -327,6 +334,7 @@ WHERE alert_content LIKE '%张三%';
 
 ## 当前数据库元数据（已精简）：
 {schema_text}
+{catalog_section}
 
 ## 用户问题：
 {question}
@@ -351,10 +359,73 @@ WHERE alert_content LIKE '%张三%';
     #     格式效果好得多。
     # 支持通过 relevant_tables 参数精简只保留相关表，减少 token 消耗
     def build_xiyan_prompt(self, question: str, metadata: Dict[str, Any], dialect: str = "SQLite",
-                           relevant_tables: List[str] = None) -> str:
+                           relevant_tables: List[str] = None, data_source: str = "") -> str:
         """Build the concise XiYanSQL prompt recommended by the model card."""
         schema_text = self._format_metadata(metadata, relevant_tables)
-        evidence_text = "只允许生成 SELECT 或 WITH 查询；不得编造不存在的表或字段；按当前数据源方言生成 SQL；只输出 SQL，不输出解释、思考过程或 Markdown 外文本。"
+        catalog_hint = catalog_prompt_hint(
+            data_source,
+            [table.get("name", "") for table in metadata.get("tables", [])],
+        )
+        evidence_items = [
+            "只允许生成 SELECT 或 WITH 查询；不得编造不存在的表或字段；按当前数据源方言生成 SQL；只输出 SQL，不输出解释、思考过程或 Markdown 外文本。",
+        ]
+        if catalog_hint:
+            evidence_items.append(catalog_hint)
+        if data_source == "hive_hadoop_demo":
+            evidence_items.append(
+                "当前 Hadoop/HDFS 演示源由本地 SQLite 执行 CSV 表；日期是 TEXT 类型 YYYY-MM-DD。按月统计必须使用 substr(event_date, 1, 7)，不要使用 TO_DATE、DATE_FORMAT、date_trunc 等 Hive/MySQL/PostgreSQL 函数。"
+            )
+            evidence_items.append(
+                "当用户询问“各品牌每月销量趋势”时，必须 SELECT p.brand、substr(e.event_date, 1, 7)、SUM(e.order_count)，FROM hadoop_order_events e JOIN hadoop_product_dim p ON e.product_id = p.product_id，并按 p.brand 和 substr(e.event_date, 1, 7) 分组。"
+            )
+            evidence_items.append(
+                "用户问销售额高于所有城市平均销售额的城市时，先按城市聚合 SUM(e.gmv) 得到 city_gmv，再用 CTE 或子查询计算 AVG(city_gmv) 比较；不能把单笔 e.gmv 的 AVG 当作城市销售额平均值。"
+            )
+        elif data_source == "postgres_stock":
+            evidence_items.append(
+                "v_stock_latest_price 没有 sector_code；科技股筛选必须 JOIN stock_symbols s ON s.symbol = l.symbol AND s.exchange_code = l.exchange_code，并使用 s.sector_code = 'TECHNOLOGY'。v_stock_price_detail 才包含 sector_code。"
+            )
+            evidence_items.append(
+                "比较最新收盘价与自身 2026 年 7 月平均收盘价时，使用相关子查询，并同时按 symbol 和 exchange_code 关联历史行情；日期用 [2026-07-01, 2026-08-01) 半开区间。"
+            )
+        elif data_source == "sqlite_demo":
+            evidence_items.append(
+                "涉及某年的 sale_date、hire_date 等日期筛选，必须使用半开区间，例如 2026 年使用字段 >= '2026-01-01' AND 字段 < '2027-01-01'；不要使用 STRFTIME('%Y', 字段)、YEAR(字段) 等会影响索引使用的函数。"
+            )
+            evidence_items.append(
+                "统计各部门销售额必须 sales s JOIN employees e ON e.id = s.employee_id JOIN departments d ON d.id = e.department_id，返回 d.name AS department_name，不能把 departments.id 错连到 sales.employee_id。题目要求包含没有员工的部门时，必须从 departments d LEFT JOIN employees e 出发，并返回 d.name 而不是 department_id。"
+            )
+        elif data_source in {"mysql_police_address", "police_address"}:
+            evidence_items.append(
+                "查询地址别名及对应标准地址时，必须从 addr_alias 关联 addr_standard_address；使用 JOIN addr_standard_address sa ON aa.std_address_code = sa.std_address_code，并返回 aa.alias_name 与 sa.full_address。不要使用 addr_alias.std_address_id，因为该字段不存在。"
+            )
+            evidence_items.append(
+                "当用户要求地址别名“包含 X”时，必须提取用户问题中的实际词 X，在 addr_alias.alias_name 上使用 LIKE '%X%' 过滤；不要把“关键词”或“X”作为字面量输出。例如包含人民路时使用 aa.alias_name LIKE '%人民路%'。"
+            )
+            evidence_items.append(
+                "查询当前登记居住人员优先使用 v_nl2sql_person_current_address；查询出租房和当前登记居住人数优先使用 v_nl2sql_house_occupancy。这两个视图已经是当前口径，不存在 is_current 字段，不要再添加 is_current = 1。v_nl2sql_person_current_address.residential_code 是编码，不是小区名称；用户说“和平里小区”等小区名时，用 full_address LIKE '%和平里小区%' 过滤。v_nl2sql_house_occupancy 也没有 residential_name 字段，小区名同样用 full_address LIKE。"
+            )
+            evidence_items.append(
+                "警务报警统计优先使用 v_nl2sql_alert_detail。日期月份必须用半开区间，例如 2026年1月 使用 alert_time >= '2026-01-01 00:00:00' AND alert_time < '2026-02-01 00:00:00'，不要使用 YEAR(alert_time) 或 MONTH(alert_time)。用户说“治安报警”时，字段实际值是“治安案件报警”，必须使用 alert_type_name LIKE '%治安%'，不要使用 alert_type_name = '治安'。用户说“已结案”时使用 alert_status_name = '已结案'，不要把中文状态写到 alert_status_code。"
+            )
+            evidence_items.append(
+                "查询报警涉及人员、嫌疑人、受害人、证人时必须 JOIN alert_involvement ai ON pa.alert_no = ai.alert_no。alert_involvement 的姓名字段是 ai.name，不是 ai.person_name；角色字段是 ai.role_code，不是 ai.role_type。嫌疑人使用 ai.role_code = 'SUSPECT'，受害人 VICTIM，证人 WITNESS，亲属 RELATIVE，一般涉及人员 INVOLVED。"
+            )
+            evidence_items.append(
+                "“和平里小区当前登记了多少名居住人员”统计该小区所有当前登记人员，不得额外限制 house_relation_name = '本人'；使用 COUNT(DISTINCT person_code) FROM v_nl2sql_person_current_address WHERE full_address LIKE '%和平里小区%'。出租房问题返回 house_code、full_address、current_person_count，并按 current_person_count DESC, house_code 排序。已结案但未关联案事件的核查必须 LEFT JOIN alert_event e ON e.alert_no = a.alert_no，条件为 a.alert_status_code = 'CLOSED' AND e.alert_no IS NULL。"
+            )
+            evidence_items.append(
+                "2026 年 1 月东城区已结案的治安报警，必须直接查询 v_nl2sql_alert_detail，使用 COUNT(DISTINCT alert_no)、district_name = '东城区'、alert_type_code = 'SECURITY'、alert_status_code = 'CLOSED'，以及 alert_time >= '2026-01-01 00:00:00' AND alert_time < '2026-02-01 00:00:00'；不需要关联 police_alert 或 alert_event。"
+            )
+        elif data_source == "gauss_ecommerce":
+            evidence_items.append(
+                "用户问“各城市/所有城市/全部城市 + 已完成订单金额”时，必须返回所有客户城市，包括没有已完成订单的城市；从 customers c 出发 LEFT JOIN orders o，并把 o.status = 'COMPLETED' 与年份范围条件写在 ON 子句中，金额用 COALESCE(SUM(o.total_amount), 0)，不要把订单条件写在 WHERE 中导致无订单城市被过滤。"
+            )
+        elif data_source == "dameng_ecommerce":
+            evidence_items.append(
+                "用户问“各城市/所有城市/全部城市 + 已完成订单金额”时，必须返回所有客户城市，包括没有已完成订单的城市；从 CUSTOMERS C 出发 LEFT JOIN ORDERS O，并把 O.STATUS = 'COMPLETED' 与年份范围条件写在 ON 子句中，金额用 COALESCE(SUM(O.TOTAL_AMOUNT), 0)，不要把订单条件写在 WHERE 中导致无订单城市被过滤。"
+            )
+        evidence_text = "\n".join(evidence_items)
         return f"""你是一名{dialect}专家，现在需要阅读并理解下面的【数据库schema】描述，以及可能用到的【参考信息】，并运用{dialect}知识生成sql语句回答【用户问题】。
 【用户问题】
 {question}

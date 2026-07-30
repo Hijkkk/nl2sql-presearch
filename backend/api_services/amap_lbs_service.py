@@ -10,6 +10,8 @@
 
 这不是替代 RESTAPIAdapter，而是建立在 REST API 基础设施之上的服务级适配层。
 """
+import copy
+import json
 import re
 import time
 from typing import Any, Dict, List, Optional
@@ -36,6 +38,8 @@ class AmapLBSService:
         self.timeout = settings.rest_api_timeout  # 请求超时时间
         # 没有传入 http_client，自动创建 httpx.Client
         self.client = http_client or httpx.Client(timeout=self.timeout)
+        self._response_cache: Dict[str, tuple[float, Dict[str, Any]]] = {}
+        self._cache_ttl_seconds = float(settings.rest_api_cache_ttl_seconds)
 
     # 判断用户问题中是否包含高德 LBS 服务关键词
 
@@ -65,9 +69,6 @@ class AmapLBSService:
         :return: ChatResponse
         """
         start = time.time()
-
-        # todo 打印问题
-        print(f"question: {question}")
 
         try:
             service = self._select_service(question, client_location=client_location)  # 1. 选择要调的高德服务
@@ -205,13 +206,7 @@ class AmapLBSService:
             "output": "JSON",
         })
 
-        # todo 打印 payload
-        print(f"payload: {payload}")
-
         rows = self._ensure_rows(payload.get("results", []))
-
-        # todo 打印 rows
-        print(f"rows: {rows}")
 
         for row in rows:
             row["origin_text"] = origin
@@ -391,13 +386,8 @@ class AmapLBSService:
             "type": "1",
             "output": "JSON",
         })
-        # todo
-        # payload: {'status': '1', 'info': 'OK', 'infocode': '10000', 'count': '1', 'results': [{'origin_id': '1', 'dest_id': '1', 'distance': '12277', 'duration': '1699'}]}
-        print(f"payload: {payload}")
         # rows: [{'origin_id': '1', 'dest_id': '1', 'distance': '12277', 'duration': '1699'}]
         rows = self._ensure_rows(payload.get("results", []))
-        # todo 打印 rows
-        print(f"rows: {rows}")
         # 补充上下文信息
         for row in rows:
             row["origin_text"] = "当前位置"
@@ -474,12 +464,19 @@ class AmapLBSService:
 
     def _get(self, endpoint: str, params: Dict[str, Any]) -> Dict[str, Any]:
         """
+        用 endpoint + params 组成 key，60 秒内命中就深拷贝返回，不再请求高德。
         发送HTTP GET请求。
         :param endpoint: API endpoint
         :param params: 请求参数
         :return: 响应数据
         """
         url = f"{self.base_url.rstrip('/')}{endpoint}"
+        cache_key = self._cache_key(endpoint, params)
+        now = time.time()
+        cached = self._response_cache.get(cache_key)
+        if cached and now - cached[0] <= self._cache_ttl_seconds:
+            return copy.deepcopy(cached[1])
+
         request_params = dict(params)
         request_params[self.key_param] = self.api_key
         response = self.client.get(url, params=request_params, timeout=self.timeout)
@@ -489,7 +486,13 @@ class AmapLBSService:
             info = payload.get("info") or payload.get("message") or "未知错误"
             infocode = payload.get("infocode")
             raise RuntimeError(f"{info}" + (f"({infocode})" if infocode else ""))
+        self._response_cache[cache_key] = (now, copy.deepcopy(payload))
+        if len(self._response_cache) > 256:
+            self._response_cache.pop(next(iter(self._response_cache)))
         return payload
+
+    def _cache_key(self, endpoint: str, params: Dict[str, Any]) -> str:
+        return endpoint + "::" + json.dumps(params, ensure_ascii=False, sort_keys=True, default=str)
 
     def _resolve_location(self, text: str) -> str:
         """
@@ -759,6 +762,11 @@ class AmapLBSService:
         return rows
 
     def _collect_columns(self, rows: List[Dict[str, Any]]) -> List[str]:
+        """
+        从多行数据中收集所有不重复的列名（字段名）。
+        :param rows:
+        :return:
+        """
         columns: List[str] = []
         for row in rows:
             for key in row.keys():

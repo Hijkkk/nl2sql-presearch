@@ -7,7 +7,7 @@ E:\SoftWare\anaconda\envs\fastapi_project\python.exe scripts\view_audit.py
 查看指定日期：
 E:\SoftWare\anaconda\envs\fastapi_project\python.exe scripts\view_audit.py --date 2026-07-28
 限制条数：
-E:\SoftWare\anaconda\envs\fastapi_project\python.exe scripts\view_audit.py --date 2026-07-28 --limit 5
+E:\SoftWare\anaconda\envs\fastapi_project\python.exe scripts\view_audit.py --date 2026-07-29 --limit 5
 列出已有日期：
 E:\SoftWare\anaconda\envs\fastapi_project\python.exe scripts\view_audit.py --list-dates
 旧审计仍在：
@@ -21,6 +21,10 @@ import sqlite3
 import sys
 from pathlib import Path
 from typing import Any
+
+for stream in (sys.stdout, sys.stderr):
+    if hasattr(stream, "reconfigure"):
+        stream.reconfigure(encoding="utf-8", errors="replace")
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -74,6 +78,11 @@ def list_audit_dates() -> None:
 
 
 def main() -> None:
+    # ================= 硬编码配置区域 =================
+    AUDIT_DATE = "2026-07-30"  # 修改这里查看指定日期
+    LIMIT = 2                 # 显示最近 N 条
+    # ================================================
+
     parser = argparse.ArgumentParser(description="查看 NL2SQL 审计记录")
     parser.add_argument("--date", default=None, help="审计日期，格式 YYYY-MM-DD；默认今天")
     parser.add_argument("--limit", type=int, default=20, help="显示最近 N 条记录，默认 20")
@@ -84,8 +93,13 @@ def main() -> None:
         list_audit_dates()
         return
 
-    init_audit_db(args.date)
-    db_path = audit_db_path(args.date)
+    # 优先使用命令行参数，其次使用硬编码值
+    audit_date = args.date or AUDIT_DATE
+    limit = args.limit or LIMIT
+    print(f"DEBUG: audit_date={audit_date}, limit={limit}")  # 调试输出
+
+    init_audit_db(audit_date)
+    db_path = audit_db_path(audit_date)
     if not db_path.exists():
         print(f"未找到审计数据库：{db_path.resolve()}")
         return
@@ -96,11 +110,11 @@ def main() -> None:
             """SELECT timestamp, question, data_source, status, execution_time, row_count,
                       rag_enabled, rag_top_score, selected_tables_json, query_guard_passed,
                       prompt_token_estimate, stage_timings_json, generated_sql, executed_sql,
-                      error_message, model_id, raw_model_output, llm_thought,
+                       error_message, model_id, raw_model_output, llm_thought, prompt_template,
                       generation_cache_hit, correction_attempted, corrected_sql,
                       result_columns_json, result_sample_json, result_truncated
                FROM audit_logs ORDER BY id DESC LIMIT ?""",
-            (max(1, args.limit),),
+            (max(1, limit),),
         ).fetchall()
 
     if not rows:
@@ -136,6 +150,9 @@ def main() -> None:
         if row["llm_thought"]:
             print("模型解释/提取 thought：")
             print(row["llm_thought"][:1000])
+        if row["prompt_template"]:
+            print("SQL 提示词：")
+            print(row["prompt_template"][:10000])
         if row["raw_model_output"]:
             print("模型原始输出：")
             print(row["raw_model_output"][:1000])

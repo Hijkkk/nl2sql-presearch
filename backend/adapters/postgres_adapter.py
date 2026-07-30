@@ -16,15 +16,15 @@ from backend.config.config import settings
 
 class PostgreSQLAdapter(BaseDataSourceAdapter):
     def __init__(
-        self,
-        name: str,
-        host: str,
-        port: int,
-        user: str,
-        password: str,
-        database: str,
-        schema: str = "public",
-        sslmode: str = "",
+            self,
+            name: str,
+            host: str,
+            port: int,
+            user: str,
+            password: str,
+            database: str,
+            schema: str = "public",
+            sslmode: str = "",
     ):
         super().__init__(name)
         self.host = host
@@ -35,6 +35,7 @@ class PostgreSQLAdapter(BaseDataSourceAdapter):
         self.schema = schema or "public"
         self.sslmode = sslmode
         self._conn = None
+        # 4 个缓存字段
         self._metadata_cache: Optional[Dict[str, Any]] = None
         self._metadata_cache_signature = ""
         self._metadata_cache_at = 0.0
@@ -122,17 +123,23 @@ class PostgreSQLAdapter(BaseDataSourceAdapter):
                 cursor.execute("SELECT 1")
 
     def get_metadata(self) -> Dict[str, Any]:
+        """
+        # 签名相同且 TTL 未过期：复用 metadata。
+        # 签名变化：立即重新读取表、字段、外键和视图 metadata。
+        # TTL 到期：即使签名相同也会全量刷新一次，以更新注释等非列结构信息
+        :return:
+        """
         conn = self._get_connection()
         now = time.time()
-        # 热路径直接使用完整元数据缓存，避免每次对 information_schema 做全量扫描。
-        if self._metadata_cache is not None and now - self._metadata_cache_at <= self._metadata_cache_ttl_seconds:
-            return self._metadata_cache
 
+        # 签名相同且 TTL 未过期：复用 metadata。
+        # 签名变化：立即重新读取表、字段、外键和视图 metadata。
+        # TTL 到期：即使签名相同也会全量刷新一次，以更新注释等非列结构信息
         signature = self._get_schema_signature(conn)
         if (
-            self._metadata_cache is not None
-            and self._metadata_cache_signature == signature
-            and now - self._metadata_cache_at <= self._metadata_cache_ttl_seconds
+                self._metadata_cache is not None
+                and self._metadata_cache_signature == signature
+                and now - self._metadata_cache_at <= self._metadata_cache_ttl_seconds
         ):
             return self._metadata_cache
 
@@ -141,10 +148,10 @@ class PostgreSQLAdapter(BaseDataSourceAdapter):
         with conn.cursor() as cursor:
             cursor.execute(
                 """
-                SELECT table_name
+                SELECT table_name, table_type
                 FROM information_schema.tables
-                WHERE table_schema = %s AND table_type = 'BASE TABLE'
-                ORDER BY table_name
+                WHERE table_schema = %s AND table_type IN ('BASE TABLE', 'VIEW')
+                ORDER BY table_type, table_name
                 """,
                 (self.schema,),
             )
@@ -152,6 +159,7 @@ class PostgreSQLAdapter(BaseDataSourceAdapter):
 
             for row in table_rows:
                 table_name = row["table_name"]
+                table_type = row.get("table_type") or "BASE TABLE"
                 cursor.execute(
                     """
                     SELECT
@@ -232,6 +240,7 @@ class PostgreSQLAdapter(BaseDataSourceAdapter):
                     {
                         "name": table_name,
                         "comment": self._table_comment(table_name),
+                        "object_type": "view" if table_type == "VIEW" else "table",
                         "columns": columns,
                         "primary_key": primary_key,
                         "foreign_keys": foreign_keys,
@@ -250,6 +259,10 @@ class PostgreSQLAdapter(BaseDataSourceAdapter):
         return metadata
 
     def _get_schema_signature(self, conn) -> str:
+        """
+        :param conn:
+        :return:
+        """
         with conn.cursor() as cursor:
             cursor.execute(
                 """
@@ -265,11 +278,12 @@ class PostgreSQLAdapter(BaseDataSourceAdapter):
                   ON t.table_schema = c.table_schema
                  AND t.table_name = c.table_name
                 WHERE c.table_schema = %s
-                  AND t.table_type = 'BASE TABLE'
+                  AND t.table_type IN ('BASE TABLE', 'VIEW')
                 ORDER BY c.table_name, c.ordinal_position
                 """,
                 (self.schema,),
             )
+            # 每一行格式化为: table_name|column_name|data_type|nullable|default|key|comment
             parts = [
                 "|".join(str(row.get(key) or "") for key in (
                     "table_name",
@@ -281,16 +295,21 @@ class PostgreSQLAdapter(BaseDataSourceAdapter):
                 ))
                 for row in cursor.fetchall()
             ]
+        # users|id|bigint|NO||PRI|
+        # users|name|varchar(100)|YES|||
+        # users|email|varchar(255)|YES||UNI|
+        # sales|id|bigint|NO||PRI|
+        # sales|amount|decimal(10,2)|YES|||
         return "\n".join(parts)
 
     def execute_query(self, sql: str, params: Optional[Dict] = None) -> Tuple[List[Dict], List[str]]:
         return self._execute_query_once(sql, params, retry=True)
 
     def _execute_query_once(
-        self,
-        sql: str,
-        params: Optional[Dict] = None,
-        retry: bool = False,
+            self,
+            sql: str,
+            params: Optional[Dict] = None,
+            retry: bool = False,
     ) -> Tuple[List[Dict], List[str]]:
         conn = self._get_connection()
         try:
@@ -308,7 +327,6 @@ class PostgreSQLAdapter(BaseDataSourceAdapter):
 
     def _normalize_row(self, row: Dict[str, Any]) -> Dict[str, Any]:
         return {key: self._to_jsonable_value(value) for key, value in row.items()}
-
 
     def _synthetic_primary_key(self, table_name: str) -> List[str]:
         if table_name in {"customers", "categories", "products", "orders", "order_items"}:

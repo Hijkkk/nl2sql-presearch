@@ -4,10 +4,12 @@
 依赖达梦官方 Python 驱动 dmPython。达梦 SQL 与 Oracle 兼容度较高，
 MVP 阶段在 SQL 安全解析中使用 oracle 方言。
 """
+import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger
 
+from backend.config.config import settings
 from .base import BaseDataSourceAdapter
 
 
@@ -31,6 +33,10 @@ class DamengAdapter(BaseDataSourceAdapter):
         self.jdbc_driver_path = jdbc_driver_path
         self._driver = ""
         self._conn = None
+        self._metadata_cache: Optional[Dict[str, Any]] = None
+        self._metadata_cache_signature = ""
+        self._metadata_cache_at = 0.0
+        self._metadata_cache_ttl_seconds = float(settings.postgres_metadata_cache_ttl_seconds)
 
     def get_dialect(self) -> str:
         return "oracle"
@@ -77,24 +83,61 @@ class DamengAdapter(BaseDataSourceAdapter):
         finally:
             cursor.close()
 
+    def clear_metadata_cache(self) -> bool:
+        self._metadata_cache = None
+        self._metadata_cache_signature = ""
+        self._metadata_cache_at = 0.0
+        return True
+
+    def warmup_metadata_cache(self) -> Dict[str, Any]:
+        return self.get_metadata()
+
+    def metadata_cache_status(self) -> Dict[str, Any]:
+        now = time.time()
+        age_seconds = max(0.0, now - self._metadata_cache_at) if self._metadata_cache else None
+        expires_in_seconds = (
+            max(0.0, self._metadata_cache_ttl_seconds - age_seconds)
+            if age_seconds is not None
+            else None
+        )
+        return {
+            "data_source": self.name,
+            "supported": True,
+            "cached": self._metadata_cache is not None,
+            "schema": self.schema,
+            "schema_signature": self._metadata_cache_signature,
+            "cache_age_seconds": round(age_seconds, 3) if age_seconds is not None else None,
+            "ttl_seconds": self._metadata_cache_ttl_seconds,
+            "expires_in_seconds": round(expires_in_seconds, 3) if expires_in_seconds is not None else None,
+            "total_tables": (self._metadata_cache or {}).get("total_tables"),
+        }
+
     def get_metadata(self) -> Dict[str, Any]:
         conn = self._get_connection()
+        now = time.time()
+        signature = self._get_schema_signature(conn)
+        if (
+            self._metadata_cache is not None
+            and self._metadata_cache_signature == signature
+            and now - self._metadata_cache_at <= self._metadata_cache_ttl_seconds
+        ):
+            return self._metadata_cache
         cursor = conn.cursor()
         tables: List[Dict[str, Any]] = []
         try:
             cursor.execute(
                 """
-                SELECT table_name, comments
+                SELECT table_name, comments, table_type
                 FROM all_tab_comments
-                WHERE owner = ? AND table_type = 'TABLE'
-                ORDER BY table_name
+                WHERE owner = ? AND table_type IN ('TABLE', 'VIEW')
+                ORDER BY table_type, table_name
                 """,
                 (self.schema,),
             )
             table_rows = cursor.fetchall()
             table_rows = [row for row in table_rows if not str(row[0]).startswith("##")]
 
-            for table_name, table_comment in table_rows:
+            for table_name, table_comment, table_type in table_rows:
                 cursor.execute(
                     """
                     SELECT
@@ -175,6 +218,7 @@ class DamengAdapter(BaseDataSourceAdapter):
                     {
                         "name": table_name,
                         "comment": table_comment or "",
+                        "object_type": "view" if table_type == "VIEW" else "table",
                         "columns": columns,
                         "primary_key": primary_key,
                         "foreign_keys": foreign_keys,
@@ -183,7 +227,46 @@ class DamengAdapter(BaseDataSourceAdapter):
         finally:
             cursor.close()
 
-        return {"tables": tables, "total_tables": len(tables)}
+        metadata = {
+            "tables": tables,
+            "total_tables": len(tables),
+            "schema_signature": signature,
+            "schema": self.schema,
+        }
+        self._metadata_cache = metadata
+        self._metadata_cache_signature = signature
+        self._metadata_cache_at = now
+        return metadata
+
+    def _get_schema_signature(self, conn) -> str:
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                """
+                SELECT
+                    c.table_name,
+                    c.column_name,
+                    c.data_type,
+                    c.nullable,
+                    cc.comments
+                FROM all_tab_columns c
+                LEFT JOIN all_col_comments cc
+                  ON cc.owner = c.owner
+                 AND cc.table_name = c.table_name
+                 AND cc.column_name = c.column_name
+                WHERE c.owner = ?
+                ORDER BY c.table_name, c.column_id
+                """,
+                (self.schema,),
+            )
+            parts = [
+                "|".join(str(value or "") for value in row)
+                for row in cursor.fetchall()
+                if not str(row[0]).startswith("##")
+            ]
+            return "\n".join(parts)
+        finally:
+            cursor.close()
 
 
     def _synthetic_primary_key(self, table_name: str) -> List[str]:

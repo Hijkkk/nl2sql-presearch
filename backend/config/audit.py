@@ -67,6 +67,7 @@ def init_audit_db(audit_date: str | date | None = None):
             model_id TEXT,
             raw_model_output TEXT,
             llm_thought TEXT,
+            prompt_template TEXT,
             generation_cache_hit INTEGER,
             correction_attempted INTEGER DEFAULT 0,
             corrected_sql TEXT,
@@ -87,6 +88,7 @@ def init_audit_db(audit_date: str | date | None = None):
         "model_id": "TEXT",
         "raw_model_output": "TEXT",
         "llm_thought": "TEXT",
+        "prompt_template": "TEXT",
         "generation_cache_hit": "INTEGER",
         "correction_attempted": "INTEGER DEFAULT 0",
         "corrected_sql": "TEXT",
@@ -132,6 +134,7 @@ def log_audit(
     model_id: Optional[str] = None,
     raw_model_output: Optional[str] = None,
     llm_thought: Optional[str] = None,
+    prompt_template: Optional[str] = None,
     generation_cache_hit: Optional[bool] = None,
     correction_attempted: bool = False,
     corrected_sql: Optional[str] = None,
@@ -149,9 +152,9 @@ def log_audit(
             (timestamp, user, question, generated_sql, executed_sql, data_source, 
              row_count, status, error_message, execution_time, rag_enabled, rag_hits_json,
              selected_tables_json, rag_top_score, query_guard_passed, prompt_token_estimate, stage_timings_json,
-             model_id, raw_model_output, llm_thought, generation_cache_hit, correction_attempted, corrected_sql,
+             model_id, raw_model_output, llm_thought, prompt_template, generation_cache_hit, correction_attempted, corrected_sql,
              result_columns_json, result_sample_json, result_truncated)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             datetime.now().isoformat(),
             user,
@@ -173,6 +176,7 @@ def log_audit(
             model_id,
             raw_model_output,
             llm_thought,
+            prompt_template,
             None if generation_cache_hit is None else int(generation_cache_hit),
             int(correction_attempted),
             corrected_sql,

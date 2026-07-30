@@ -134,6 +134,7 @@ class RESTAPIAdapter(BaseDataSourceAdapter):
     def get_metadata(self) -> Dict[str, Any]:
         rows = self._fetch_rows()  # 1. 请求 API 获取数据
         columns = self._infer_columns(rows)  # 2. 根据数据推断字段类型
+        view_columns = self._weather_view_columns(columns)
         # # 返回格式：
         # {
         #     "tables": [{
@@ -157,9 +158,19 @@ class RESTAPIAdapter(BaseDataSourceAdapter):
                     "columns": columns,
                     "primary_key": [],
                     "foreign_keys": [],
-                }
+                },
+                *([
+                    {
+                        "name": "v_weather_latest",
+                        "comment": "Latest weather semantic view over amap_weather.",
+                        "object_type": "view",
+                        "columns": view_columns,
+                        "primary_key": [],
+                        "foreign_keys": [],
+                    }
+                ] if self.table_name == "amap_weather" else [])
             ],
-            "total_tables": 1,
+            "total_tables": 2 if self.table_name == "amap_weather" else 1,
         }
 
     # 把 REST API 数据加载到内存 SQLite 表，执行 SQL，返回结果。
@@ -171,6 +182,7 @@ class RESTAPIAdapter(BaseDataSourceAdapter):
         conn.row_factory = sqlite3.Row
         try:
             self._load_rows_into_memory_table(conn, rows, columns)  # 4. 建表 + 插入数据
+            self._create_semantic_views(conn)
             cursor = conn.cursor()  # 5. 创建游标对象
             if params:
                 cursor.execute(sql, params)  # 6. 执行 SQL 查询
@@ -352,6 +364,39 @@ class RESTAPIAdapter(BaseDataSourceAdapter):
         ]
         conn.executemany(insert_sql, values)
         conn.commit()
+
+    def _create_semantic_views(self, conn: sqlite3.Connection) -> None:
+        if self.table_name != "amap_weather":
+            return
+        base_columns = {
+            row[1] for row in conn.execute(f'PRAGMA table_info("{self.table_name}")')
+        }
+        derived_columns = []
+        if "temperature" in base_columns:
+            derived_columns.append('CAST(NULLIF("temperature", \'\') AS REAL) AS "temperature_celsius"')
+        if "humidity" in base_columns:
+            derived_columns.append('CAST(NULLIF("humidity", \'\') AS REAL) AS "humidity_percent"')
+        select_columns = "*" + (", " + ", ".join(derived_columns) if derived_columns else "")
+        conn.execute(f'''
+            CREATE VIEW "v_weather_latest" AS
+            SELECT {select_columns}
+            FROM "{self.table_name}"
+            WHERE COALESCE("reporttime", '') = (
+                SELECT MAX(COALESCE("reporttime", ''))
+                FROM "{self.table_name}"
+            )
+        ''')
+
+    @staticmethod
+    def _weather_view_columns(columns: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Expose the semantic view contract advertised by the NL2SQL catalog."""
+        result = [dict(column) for column in columns]
+        existing = {str(column.get("name")) for column in result}
+        if "temperature" in existing and "temperature_celsius" not in existing:
+            result.append({"name": "temperature_celsius", "type": "REAL", "comment": "数值温度（摄氏度）", "not_null": False, "default": None, "pk": False})
+        if "humidity" in existing and "humidity_percent" not in existing:
+            result.append({"name": "humidity_percent", "type": "REAL", "comment": "数值湿度（百分比）", "not_null": False, "default": None, "pk": False})
+        return result
 
     def _column_key_pairs(self, row: Dict[str, Any], column_names: List[str]) -> List[Tuple[str, str]]:
         normalized_to_original = {self._normalize_identifier(key): key for key in row.keys()}

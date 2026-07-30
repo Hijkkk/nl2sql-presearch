@@ -85,6 +85,7 @@ class GraphQLAdapter(BaseDataSourceAdapter):
     def get_metadata(self) -> Dict[str, Any]:
         rows = self._fetch_rows()
         columns = self._infer_columns(rows)
+        has_code = any(column["name"] == "code" for column in columns)
         return {
             "tables": [
                 {
@@ -94,11 +95,61 @@ class GraphQLAdapter(BaseDataSourceAdapter):
                         "Countries 默认字段包含国家、首都、货币、洲、语言等信息。"
                     ),
                     "columns": columns,
-                    "primary_key": ["code"] if any(column["name"] == "code" for column in columns) else [],
+                    "primary_key": ["code"] if has_code else [],
                     "foreign_keys": [],
-                }
+                },
+                {
+                    "name": "country_currencies",
+                    "comment": "Country to currency relation table split from GraphQL comma-separated currency values.",
+                    "columns": [
+                        {"name": "country_code", "type": "TEXT", "comment": "Country code", "not_null": True, "default": None, "pk": False},
+                        {"name": "currency_code", "type": "TEXT", "comment": "Currency code", "not_null": True, "default": None, "pk": False},
+                    ],
+                    "primary_key": ["country_code", "currency_code"],
+                    "foreign_keys": [{"column": "country_code", "ref_table": self.table_name, "ref_column": "code"}] if has_code else [],
+                },
+                {
+                    "name": "country_languages",
+                    "comment": "Country to language relation table split from GraphQL languages array.",
+                    "columns": [
+                        {"name": "country_code", "type": "TEXT", "comment": "Country code", "not_null": True, "default": None, "pk": False},
+                        {"name": "language_code", "type": "TEXT", "comment": "Language code", "not_null": False, "default": None, "pk": False},
+                        {"name": "language_name", "type": "TEXT", "comment": "Language name", "not_null": False, "default": None, "pk": False},
+                    ],
+                    "primary_key": ["country_code", "language_code"],
+                    "foreign_keys": [{"column": "country_code", "ref_table": self.table_name, "ref_column": "code"}] if has_code else [],
+                },
+                {
+                    "name": "dict_continent",
+                    "comment": "Continent dictionary derived from country continent fields.",
+                    "columns": [
+                        {"name": "continent_code", "type": "TEXT", "comment": "Continent code", "not_null": True, "default": None, "pk": True},
+                        {"name": "continent_name", "type": "TEXT", "comment": "Continent name", "not_null": False, "default": None, "pk": False},
+                    ],
+                    "primary_key": ["continent_code"],
+                    "foreign_keys": [],
+                },
+                {
+                    "name": "v_country_profile",
+                    "comment": "Semantic view for country profile with continent, currency codes, and language names.",
+                    "columns": [
+                        {"name": "country_code", "type": "TEXT", "comment": "Country code", "not_null": False, "default": None, "pk": False},
+                        {"name": "country_name", "type": "TEXT", "comment": "Country name", "not_null": False, "default": None, "pk": False},
+                        {"name": "native_name", "type": "TEXT", "comment": "Native country name", "not_null": False, "default": None, "pk": False},
+                        {"name": "capital", "type": "TEXT", "comment": "Capital", "not_null": False, "default": None, "pk": False},
+                        {"name": "calling_code", "type": "TEXT", "comment": "International calling code", "not_null": False, "default": None, "pk": False},
+                        {"name": "emoji", "type": "TEXT", "comment": "Country flag emoji", "not_null": False, "default": None, "pk": False},
+                        {"name": "continent_code", "type": "TEXT", "comment": "Continent code", "not_null": False, "default": None, "pk": False},
+                        {"name": "continent_name", "type": "TEXT", "comment": "Continent name", "not_null": False, "default": None, "pk": False},
+                        {"name": "currency_codes", "type": "TEXT", "comment": "Comma-separated currency codes", "not_null": False, "default": None, "pk": False},
+                        {"name": "language_codes", "type": "TEXT", "comment": "Comma-separated language codes", "not_null": False, "default": None, "pk": False},
+                        {"name": "language_names", "type": "TEXT", "comment": "Comma-separated language names", "not_null": False, "default": None, "pk": False},
+                    ],
+                    "primary_key": [],
+                    "foreign_keys": [],
+                },
             ],
-            "total_tables": 1,
+            "total_tables": 5,
         }
 
     def execute_query(self, sql: str, params: Optional[Dict] = None) -> Tuple[List[Dict], List[str]]:
@@ -109,6 +160,8 @@ class GraphQLAdapter(BaseDataSourceAdapter):
         conn.row_factory = sqlite3.Row
         try:
             self._load_rows_into_memory_table(conn, rows, columns)
+            self._load_country_relation_tables(conn, rows)
+            self._create_country_profile_view(conn)
             cursor = conn.cursor()
             if params:
                 cursor.execute(sql, params)
@@ -236,6 +289,98 @@ class GraphQLAdapter(BaseDataSourceAdapter):
             ])
         conn.executemany(insert_sql, values)
         conn.commit()
+
+    def _load_country_relation_tables(self, conn: sqlite3.Connection, rows: List[Dict[str, Any]]) -> None:
+        conn.execute(
+            'CREATE TABLE "country_currencies" ('
+            '"country_code" TEXT NOT NULL, '
+            '"currency_code" TEXT NOT NULL, '
+            'PRIMARY KEY ("country_code", "currency_code"))'
+        )
+        conn.execute(
+            'CREATE TABLE "country_languages" ('
+            '"country_code" TEXT NOT NULL, '
+            '"language_code" TEXT, '
+            '"language_name" TEXT, '
+            'PRIMARY KEY ("country_code", "language_code"))'
+        )
+        conn.execute(
+            'CREATE TABLE "dict_continent" ('
+            '"continent_code" TEXT PRIMARY KEY, '
+            '"continent_name" TEXT)'
+        )
+
+        currency_rows = []
+        language_rows = []
+        continent_rows = {}
+        for row in rows:
+            country_code = str(row.get("code") or "").strip()
+            if not country_code:
+                continue
+            for currency_code in self._split_csv(row.get("currency")):
+                currency_rows.append((country_code, currency_code))
+
+            language_codes = self._split_csv(row.get("language_codes"))
+            language_names = self._split_csv(row.get("language_names"))
+            for index, language_code in enumerate(language_codes):
+                language_name = language_names[index] if index < len(language_names) else ""
+                language_rows.append((country_code, language_code, language_name))
+
+            continent_code = str(row.get("continent_code") or "").strip()
+            if continent_code:
+                continent_rows[continent_code] = str(row.get("continent_name") or "")
+
+        if currency_rows:
+            conn.executemany(
+                'INSERT OR IGNORE INTO "country_currencies" ("country_code", "currency_code") VALUES (?, ?)',
+                currency_rows,
+            )
+        if language_rows:
+            conn.executemany(
+                'INSERT OR IGNORE INTO "country_languages" ("country_code", "language_code", "language_name") VALUES (?, ?, ?)',
+                language_rows,
+            )
+        if continent_rows:
+            conn.executemany(
+                'INSERT OR REPLACE INTO "dict_continent" ("continent_code", "continent_name") VALUES (?, ?)',
+                list(continent_rows.items()),
+            )
+        conn.commit()
+
+    def _create_country_profile_view(self, conn: sqlite3.Connection) -> None:
+        conn.execute(f'''
+            CREATE VIEW "v_country_profile" AS
+            SELECT
+                c."code" AS country_code,
+                c."name" AS country_name,
+                c."native" AS native_name,
+                c."capital" AS capital,
+                c."phone" AS calling_code,
+                c."emoji" AS emoji,
+                c."continent_code" AS continent_code,
+                c."continent_name" AS continent_name,
+                COALESCE((
+                    SELECT GROUP_CONCAT(cc."currency_code")
+                    FROM "country_currencies" cc
+                    WHERE cc."country_code" = c."code"
+                ), c."currency") AS currency_codes,
+                COALESCE((
+                    SELECT GROUP_CONCAT(cl."language_code")
+                    FROM "country_languages" cl
+                    WHERE cl."country_code" = c."code"
+                ), c."language_codes") AS language_codes,
+                COALESCE((
+                    SELECT GROUP_CONCAT(cl."language_name")
+                    FROM "country_languages" cl
+                    WHERE cl."country_code" = c."code"
+                ), c."language_names") AS language_names
+            FROM "{self.table_name}" c
+        ''')
+
+    def _split_csv(self, value: Any) -> List[str]:
+        if value is None:
+            return []
+        return [part.strip() for part in str(value).split(",") if part.strip()]
 
     def _flatten_dict(self, data: Dict[str, Any], prefix: str = "") -> Dict[str, Any]:
         flat: Dict[str, Any] = {}

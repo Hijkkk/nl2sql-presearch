@@ -6,6 +6,8 @@
 from typing import Dict, List, Any
 import re
 from loguru import logger
+# 获取该数据源在 catalog 中定义的首选表/视图
+from backend.nl2sql.catalog import get_source_catalog, preferred_objects_for
 
 try:
     # Python 最流行的中文分词工具，能把一句中文拆成有意义的词语。
@@ -33,10 +35,17 @@ def extract_chinese_bigrams(text: str) -> set[str]:
     return bigrams
 
 
+def _is_semantic_view(table_name: str, table_lookup: Dict[str, Dict[str, Any]]) -> bool:
+    table = table_lookup.get(table_name, {})
+    object_type = str(table.get("object_type") or table.get("type") or "").lower()
+    return object_type == "view" or table_name.lower().startswith(("v_", "view_", "mv_"))
+
+
 def select_relevant_tables(
     question: str, 
     metadata: Dict[str, Any], 
-    max_tables: int = 5
+    max_tables: int = 5,
+    data_source: str = "",
 ) -> List[str]:
     """
     基于关键词匹配选择相关表
@@ -56,6 +65,9 @@ def select_relevant_tables(
 
     # 问题小写化 "查询IT部门".lower()   →  "查询it部门"
     question_lower = question.lower()
+    table_lookup = {table["name"]: table for table in tables}
+    catalog = get_source_catalog(data_source)
+    preferred_objects = preferred_objects_for(data_source, table_lookup)
     # 把问题拆成有意义的词，长度大于一的词
     # ("技术部薪资高于平均的员工有哪些？")
     # → ["技术部", "薪资", "高于", "平均", "的", "员工", "有", "哪些", "？"]
@@ -133,6 +145,20 @@ def select_relevant_tables(
             col_name = col["name"].lower()
             if col_name in question_lower:
                 score += 1
+
+        if table["name"] in preferred_objects:
+            score += 2
+
+        for synonym, values in (catalog.get("synonyms") or {}).items():
+            if str(synonym).lower() not in question_lower:
+                continue
+            for value in values if isinstance(values, list) else [values]:
+                value_text = str(value).strip().strip("\"'").lower()
+                value_table = value_text.split(".", 1)[0]
+                if value_text == name or value_table == name:
+                    score += 8
+                elif value_text in searchable_text:
+                    score += 3
         
         scores[table["name"]] = score
 
@@ -140,8 +166,48 @@ def select_relevant_tables(
     sorted_tables = sorted(scores.items(), key=lambda x: x[1], reverse=True)
     
     # 至少保留有分数的表，最多 max_tables
-    # [:max_tables] → 最多取前 max_tables 个（默认 5 个）
-    selected = [name for name, score in sorted_tables if score > 0][:max_tables]
+    # [:max_tables] → 最多取前 max_tables 个
+    selected = [
+        name
+        for name, score in sorted_tables
+        if score > (2 if name in preferred_objects else 0)
+    ][:max_tables]
+
+    if preferred_objects:
+        # 筛选语义视图	优先选择语义视图（按分数排序）
+        # 筛选其他 preferred	选择分数高的普通表
+        # 合并去重	保证顺序：语义视图 > 原有的 selected > 其他 preferred
+        # 限制数量	不超过 max_tables
+        semantic_views = [
+            name for name in preferred_objects
+            if _is_semantic_view(name, table_lookup) and scores.get(name, 0) > 2
+        ]
+        semantic_views = sorted(semantic_views, key=lambda name: scores.get(name, 0), reverse=True)
+        relevant_preferred = [
+            name for name in preferred_objects
+            if scores.get(name, 0) > 2 and name not in semantic_views
+        ]
+        selected = list(dict.fromkeys(semantic_views + selected + relevant_preferred))[:max_tables]
+
+    # 第一层	语义视图关键词匹配	优先使用预定义的聚合视图
+    # 第二层	Hadoop 大数据表匹配	匹配大数据场景
+    # 第三层	police 表分组匹配	精准匹配警务表结构
+    # 保底	返回所有表	防止空结果
+    if data_source in {"mysql_police_address", "police_address"}:
+        police_view_priority: list[str] = []
+        if any(keyword in question_lower for keyword in ("居住", "住址", "当前", "小区", "人员", "住户", "登记")):
+            police_view_priority.extend(["v_nl2sql_person_current_address", "v_nl2sql_house_occupancy"])
+        if any(keyword in question_lower for keyword in ("嫌疑", "嫌疑人", "涉案", "涉及", "受害", "报警人", "证人")):
+            police_view_priority.extend(["v_nl2sql_alert_detail", "alert_involvement", "police_alert"])
+        elif any(keyword in question_lower for keyword in ("报警", "警情", "治安", "结案", "接警", "案发")):
+            police_view_priority.append("v_nl2sql_alert_detail")
+        if any(keyword in question_lower for keyword in ("嫌疑", "嫌疑人", "涉案", "涉及", "受害", "报警人", "证人")):
+            police_view_priority.append("alert_involvement")
+        if any(keyword in question_lower for keyword in ("单位", "组织", "企业", "经营", "注册")):
+            police_view_priority.append("v_nl2sql_organization_address")
+        police_view_priority = [name for name in police_view_priority if name in table_lookup]
+        if police_view_priority:
+            selected = list(dict.fromkeys(police_view_priority + selected))[:max_tables]
     
     hadoop_tables = [
         "hadoop_order_events",
@@ -190,6 +256,18 @@ def select_relevant_tables(
         selected = list(dict.fromkeys(police_priority + police_selected + selected))[:max_tables]
 
     # 如果一个都没匹配到，就返回所有表（保底）
+    if data_source in {"mysql_police_address", "police_address"}:
+        police_view_priority: list[str] = []
+        if any(keyword in question_lower for keyword in ("居住", "住址", "当前", "小区", "人员", "住户", "登记")):
+            police_view_priority.extend(["v_nl2sql_person_current_address", "v_nl2sql_house_occupancy"])
+        if any(keyword in question_lower for keyword in ("报警", "警情", "治安", "结案", "接警", "案发")):
+            police_view_priority.append("v_nl2sql_alert_detail")
+        if any(keyword in question_lower for keyword in ("单位", "组织", "企业", "经营", "注册")):
+            police_view_priority.append("v_nl2sql_organization_address")
+        police_view_priority = [name for name in police_view_priority if name in table_lookup]
+        if police_view_priority:
+            selected = list(dict.fromkeys(police_view_priority + selected))[:max_tables]
+
     if not selected:
         selected = [t["name"] for t in tables][:max_tables]
     

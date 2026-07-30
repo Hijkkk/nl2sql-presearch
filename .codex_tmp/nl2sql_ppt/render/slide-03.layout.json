@@ -1,0 +1,310 @@
+{
+  "schema": "openai.presentation.layout/v4",
+  "unit": "px",
+  "slide": {
+    "aid": "sl/o93y1g",
+    "id": "o93y1g",
+    "slide": 3,
+    "layoutId": "038954df-5ffc-46d0-a8c8-1baa2f19672c",
+    "layoutName": "Title Slide",
+    "layoutType": "title",
+    "masterLayoutId": "abf48970-3a31-4d54-88a7-d2c8c7f3451e",
+    "masterLayoutName": "Master",
+    "backgroundColor": "#FFFFFF",
+    "frame": {
+      "left": 0,
+      "top": 0,
+      "width": 1280,
+      "height": 720
+    }
+  },
+  "theme": {
+    "colorSchemeName": "ChatGPT",
+    "colors": {
+      "accent1": "#156082",
+      "accent2": "#E97132",
+      "accent3": "#196B24",
+      "accent4": "#0F9ED5",
+      "accent5": "#A02B93",
+      "accent6": "#4EA72E",
+      "bg1": "#FFFFFF",
+      "bg2": "#000000",
+      "tx1": "#1F1F1F",
+      "tx2": "#FFFFFF",
+      "dk1": "#000000",
+      "lt1": "#FFFFFF",
+      "dk2": "#0E2841",
+      "lt2": "#E8E8E8",
+      "hlink": "#467886",
+      "folHlink": "#96607D"
+    },
+    "typefaces": [
+      "+mn-lt"
+    ]
+  },
+  "inheritedLayers": [
+    {
+      "scope": "layout",
+      "id": "038954df-5ffc-46d0-a8c8-1baa2f19672c",
+      "name": "Title Slide",
+      "type": "title",
+      "parentLayoutId": "abf48970-3a31-4d54-88a7-d2c8c7f3451e",
+      "elements": []
+    },
+    {
+      "scope": "master",
+      "id": "abf48970-3a31-4d54-88a7-d2c8c7f3451e",
+      "name": "Master",
+      "type": "master",
+      "elements": []
+    }
+  ],
+  "elements": [
+    {
+      "order": 1,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/ul4z6d4z",
+      "id": "1",
+      "bbox": [
+        72,
+        48,
+        980,
+        58
+      ],
+      "geometry": "rect",
+      "text": "8 个数据源覆盖了核心 MVP 演示面",
+      "textPreview": "8 个数据源覆盖了核心 MVP 演示面",
+      "resolvedFontSize": 38,
+      "resolvedTextStyle": {
+        "fontSize": 38,
+        "typeface": "+mn-lt",
+        "color": "#000000",
+        "bold": true,
+        "alignment": "left",
+        "insets": {
+          "top": 4.8,
+          "right": 9.6,
+          "bottom": 4.8,
+          "left": 9.6
+        }
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "8 个数据源覆盖了核心 MVP 演示面"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "8 个数据源覆盖了核心 MVP 演示面",
+          "resolvedTextStyle": {
+            "fontSize": 38,
+            "color": "#000000",
+            "bold": true,
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "8 个数据源覆盖了核心 MVP 演示面",
+              "fontSize": 38,
+              "color": "#000000",
+              "bold": true,
+              "alignment": "left"
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "lineWidth": 0
+    },
+    {
+      "order": 2,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/hofihsnq",
+      "id": "2",
+      "bbox": [
+        72,
+        130,
+        1136,
+        1.5
+      ],
+      "geometry": "rect",
+      "fillColor": "#B8BCC4",
+      "lineWidth": 0
+    },
+    {
+      "order": 3,
+      "kind": "chart",
+      "scope": "slide",
+      "aid": "ch/47e14jat",
+      "id": "3",
+      "bbox": [
+        88,
+        178,
+        760,
+        388
+      ],
+      "chartType": "bar"
+    },
+    {
+      "order": 4,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/3ax0ji5w",
+      "id": "4",
+      "bbox": [
+        900,
+        194,
+        280,
+        180
+      ],
+      "geometry": "rect",
+      "text": "所有数据源均已通过当前 golden cases。PostgreSQL 股票库保持数据源名 postgres_stock，并使用本地 pg-local 容器。",
+      "textPreview": "所有数据源均已通过当前 golden cases。PostgreSQL 股票库保持数据源名 postgres_stock，并使用本地 pg-local 容器。",
+      "resolvedFontSize": 24,
+      "resolvedTextStyle": {
+        "fontSize": 24,
+        "typeface": "+mn-lt",
+        "color": "#000000",
+        "alignment": "left",
+        "insets": {
+          "top": 4.8,
+          "right": 9.6,
+          "bottom": 4.8,
+          "left": 9.6
+        }
+      },
+      "textLayout": {
+        "lineCount": 6,
+        "lines": [
+          {
+            "index": 1,
+            "text": "所有数据源均已通过当"
+          },
+          {
+            "index": 2,
+            "text": "前 golden"
+          },
+          {
+            "index": 3,
+            "text": "cases。PostgreSQL"
+          },
+          {
+            "index": 4,
+            "text": "股票库保持数据源名"
+          },
+          {
+            "index": 5,
+            "text": "postgres_stock，并使用"
+          },
+          {
+            "index": 6,
+            "text": "本地 pg-local 容器。"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "所有数据源均已通过当前 golden cases。PostgreSQL 股票库保持数据源名 postgres_stock，并使用本地 pg-local 容器。",
+          "resolvedTextStyle": {
+            "fontSize": 24,
+            "color": "#000000",
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "所有数据源均已通过当前 golden cases。PostgreSQL 股票库保持数据源名 postgres_stock，并使用本地 pg-local 容器。",
+              "fontSize": 24,
+              "color": "#000000",
+              "alignment": "left"
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "lineWidth": 0
+    },
+    {
+      "order": 5,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/i9ozax4b",
+      "id": "5",
+      "bbox": [
+        900,
+        414,
+        280,
+        130
+      ],
+      "geometry": "rect",
+      "text": "慢点主要集中在 Dameng 与 Hadoop，属于适配器/本地演示执行路径和模型输出波动，不是单一模型能力问题。",
+      "textPreview": "慢点主要集中在 Dameng 与 Hadoop，属于适配器/本地演示执行路径和模型输出波动，不是单一模型能力问题。",
+      "resolvedFontSize": 20,
+      "resolvedTextStyle": {
+        "fontSize": 20,
+        "typeface": "+mn-lt",
+        "color": "#4B5563",
+        "alignment": "left",
+        "insets": {
+          "top": 4.8,
+          "right": 9.6,
+          "bottom": 4.8,
+          "left": 9.6
+        }
+      },
+      "textLayout": {
+        "lineCount": 4,
+        "lines": [
+          {
+            "index": 1,
+            "text": "慢点主要集中在 Dameng 与"
+          },
+          {
+            "index": 2,
+            "text": "Hadoop，属于适配器/本地演"
+          },
+          {
+            "index": 3,
+            "text": "示执行路径和模型输出波动，"
+          },
+          {
+            "index": 4,
+            "text": "不是单一模型能力问题。"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "慢点主要集中在 Dameng 与 Hadoop，属于适配器/本地演示执行路径和模型输出波动，不是单一模型能力问题。",
+          "resolvedTextStyle": {
+            "fontSize": 20,
+            "color": "#4B5563",
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "慢点主要集中在 Dameng 与 Hadoop，属于适配器/本地演示执行路径和模型输出波动，不是单一模型能力问题。",
+              "fontSize": 20,
+              "color": "#4B5563",
+              "alignment": "left"
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "lineWidth": 0
+    }
+  ],
+  "composeRuns": []
+}

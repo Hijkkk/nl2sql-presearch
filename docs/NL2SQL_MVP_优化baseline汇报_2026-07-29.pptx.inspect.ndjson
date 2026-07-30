@@ -1,0 +1,83 @@
+{"kind":"deck","id":"pr/er4dml","name":"Deck"}
+{"kind":"layout","layoutId":"abf48970-3a31-4d54-88a7-d2c8c7f3451e","name":"Master","type":"master"}
+{"kind":"layout","layoutId":"038954df-5ffc-46d0-a8c8-1baa2f19672c","name":"Title Slide","type":"title"}
+{"kind":"slide","id":"sl/u49nyj","slide":1,"title":"NL2SQL MVP","textShapes":5}
+{"kind":"textbox","id":"sh/h0nqlgji","slide":1,"text":"NL2SQL MVP","textPreview":"NL2SQL MVP","textChars":10,"textLines":1,"bbox":[72,64,520,64]}
+{"kind":"textbox","id":"sh/uxw7a10r","slide":1,"text":"优化 baseline 已经达到可汇报状态","textPreview":"优化 baseline 已经达到可汇报状态","textChars":21,"textLines":1,"bbox":[72,184,850,92]}
+{"kind":"textbox","id":"sh/vy5oj61c","slide":1,"text":"2026-07-29 · Windows 本机 · 标准后端 8002","textPreview":"2026-07-29 · Windows 本机 · 标准后端 8002","textChars":35,"textLines":1,"bbox":[72,548,720,32]}
+{"kind":"shape","id":"sh/8vep8ri1","slide":1,"bbox":[914,92,220,220]}
+{"kind":"textbox","id":"sh/9wn6hwjm","slide":1,"text":"100%","textPreview":"100%","textChars":4,"textLines":1,"bbox":[944,142,160,64]}
+{"kind":"textbox","id":"sh/mtc7610v","slide":1,"text":"33 / 33 golden cases","textPreview":"33 / 33 golden cases","textChars":20,"textLines":1,"bbox":[944,224,160,44]}
+{"kind":"notes","id":"nt/u49nyj","slide":1,"text":"[Sources]\ntraining/xiyan3b_ollama_mvp_optimized_report.json; docs/NL2SQL_MVP_优化baseline测试报告_2026-07-29.md"}
+{"kind":"slide","id":"sl/jxv9wk","slide":2,"title":"Baseline 结果说明 LoRA 不是当前瓶颈","textShapes":14}
+{"kind":"textbox","id":"sh/p0bqpkjm","slide":2,"text":"Baseline 结果说明 LoRA 不是当前瓶颈","textPreview":"Baseline 结果说明 LoRA 不是当前瓶颈","textChars":25,"textLines":1,"bbox":[72,48,1050,58]}
+{"kind":"shape","id":"sh/2xk7u5kb","slide":2,"bbox":[72,130,1136,1.5]}
+{"kind":"shape","id":"sh/nyt8na1w","slide":2,"bbox":[72,188,250,150]}
+{"kind":"textbox","id":"sh/0v2psv25","slide":2,"text":"100%","textPreview":"100%","textChars":4,"textLines":1,"bbox":[96,212,202,52]}
+{"kind":"textbox","id":"sh/1wb6l0jq","slide":2,"text":"通过率","textPreview":"通过率","textChars":3,"textLines":1,"bbox":[96,270,202,30]}
+{"kind":"textbox","id":"sh/e907q5kz","slide":2,"text":"33 条全通过","textPreview":"33 条全通过","textChars":7,"textLines":1,"bbox":[96,302,202,24]}
+{"kind":"shape","id":"sh/fatoja1k","slide":2,"bbox":[354,188,250,150]}
+{"kind":"textbox","id":"sh/s7ipov29","slide":2,"text":"2.427s","textPreview":"2.427s","textChars":6,"textLines":1,"bbox":[378,212,202,52]}
+{"kind":"textbox","id":"sh/d8r6h03u","slide":2,"text":"平均耗时","textPreview":"平均耗时","textChars":4,"textLines":1,"bbox":[378,270,202,30]}
+{"kind":"textbox","id":"sh/twve1sr6","slide":2,"text":"端到端 wall time","textPreview":"端到端 wall time","textChars":13,"textLines":1,"bbox":[378,302,202,24]}
+{"kind":"shape","id":"sh/8vmdsna1","slide":2,"bbox":[636,188,250,150]}
+{"kind":"textbox","id":"sh/7adczi9g","slide":2,"text":"1.708s","textPreview":"1.708s","textChars":6,"textLines":1,"bbox":[660,212,202,52]}
+{"kind":"textbox","id":"sh/694vqdsv","slide":2,"text":"P50","textPreview":"P50","textChars":3,"textLines":1,"bbox":[660,270,202,30]}
+{"kind":"textbox","id":"sh/l8vux8ra","slide":2,"text":"中位响应","textPreview":"中位响应","textChars":4,"textLines":1,"bbox":[660,302,202,24]}
+{"kind":"shape","id":"sh/k7mdo3ap","slide":2,"bbox":[918,188,250,150]}
+{"kind":"textbox","id":"sh/j6dcvy94","slide":2,"text":"4.354s","textPreview":"4.354s","textChars":6,"textLines":1,"bbox":[942,212,202,52]}
+{"kind":"textbox","id":"sh/y5kvmdsj","slide":2,"text":"P95","textPreview":"P95","textChars":3,"textLines":1,"bbox":[942,270,202,30]}
+{"kind":"textbox","id":"sh/x4but8re","slide":2,"text":"尾部延迟","textPreview":"尾部延迟","textChars":4,"textLines":1,"bbox":[942,302,202,24]}
+{"kind":"textbox","id":"sh/w32dk3at","slide":2,"text":"当前收益主要来自 prompt 压缩、metadata cache、结果摘要模板和数据源专属约束；不是通过训练获得。","textPreview":"当前收益主要来自 prompt 压缩、metadata cache、结果摘要模板和数据源专属约束；不是通过训练获得。","textChars":58,"textLines":1,"bbox":[90,426,1060,72]}
+{"kind":"notes","id":"nt/jxv9wk","slide":2,"text":"[Sources]\ntraining/xiyan3b_ollama_mvp_optimized_report.json"}
+{"kind":"slide","id":"sl/o93y1g","slide":3,"title":"8 个数据源覆盖了核心 MVP 演示面","textShapes":3}
+{"kind":"textbox","id":"sh/ul4z6d4z","slide":3,"text":"8 个数据源覆盖了核心 MVP 演示面","textPreview":"8 个数据源覆盖了核心 MVP 演示面","textChars":19,"textLines":1,"bbox":[72,48,980,58]}
+{"kind":"shape","id":"sh/hofihsnq","slide":3,"bbox":[72,130,1136,1.5]}
+{"kind":"textbox","id":"sh/3ax0ji5w","slide":3,"text":"所有数据源均已通过当前 golden cases。PostgreSQL 股票库保持数据源名 postgres_stock，并使用本地 pg-local 容器。","textPreview":"所有数据源均已通过当前 golden cases。PostgreSQL 股票库保持数据源名 postgres_stock，并使用本地 pg-local 容器。","textChars":79,"textLines":1,"bbox":[900,194,280,180]}
+{"kind":"textbox","id":"sh/i9ozax4b","slide":3,"text":"慢点主要集中在 Dameng 与 Hadoop，属于适配器/本地演示执行路径和模型输出波动，不是单一模型能力问题。","textPreview":"慢点主要集中在 Dameng 与 Hadoop，属于适配器/本地演示执行路径和模型输出波动，不是单一模型能力问题。","textChars":57,"textLines":1,"bbox":[900,414,280,130]}
+{"kind":"chart","id":"ch/47e14jat","slide":3,"name":"","chartType":"bar","bbox":[88,178,760,388]}
+{"kind":"notes","id":"nt/o93y1g","slide":3,"text":"[Sources]\ntraining/xiyan3b_ollama_mvp_optimized_report.json; /api/v1/data-sources validation on 2026-07-29"}
+{"kind":"slide","id":"sl/m0xezk","slide":4,"title":"剩余错误用工程修正解决，而不是先训练","textShapes":7}
+{"kind":"textbox","id":"sh/90n6xgz2","slide":4,"text":"剩余错误用工程修正解决，而不是先训练","textPreview":"剩余错误用工程修正解决，而不是先训练","textChars":18,"textLines":1,"bbox":[72,48,1060,58]}
+{"kind":"shape","id":"sh/mxcn21gb","slide":4,"bbox":[72,130,1136,1.5]}
+{"kind":"shape","id":"sh/ny5ov6hw","slide":4,"bbox":[86,190,500,260]}
+{"kind":"textbox","id":"sh/w3e58vyd","slide":4,"text":"Hadoop 月度趋势","textPreview":"Hadoop 月度趋势","textChars":11,"textLines":1,"bbox":[116,220,430,36]}
+{"kind":"textbox","id":"sh/x4n610zy","slide":4,"text":"失败原因：模型生成 TO_DATE / DATE_FORMAT，但本地演示适配器用 SQLite 执行 CSV。","textPreview":"失败原因：模型生成 TO_DATE / DATE_FORMAT，但本地演示适配器用 SQLite 执行 CSV。","textChars":56,"textLines":1,"bbox":[116,286,420,74]}
+{"kind":"textbox","id":"sh/a1wn6lgn","slide":4,"text":"修正：XiYan prompt 明确使用 substr(event_date, 1, 7)。","textPreview":"修正：XiYan prompt 明确使用 substr(event_date, 1, 7)。","textChars":46,"textLines":1,"bbox":[116,380,420,48]}
+{"kind":"shape","id":"sh/v25ozqhs","slide":4,"bbox":[694,190,500,260]}
+{"kind":"textbox","id":"sh/c7u5wry9","slide":4,"text":"警务地址别名","textPreview":"警务地址别名","textChars":6,"textLines":1,"bbox":[724,220,430,36]}
+{"kind":"textbox","id":"sh/d83mpwzu","slide":4,"text":"失败原因：旧 few-shot 使用不存在的 addr_alias.std_address_id。","textPreview":"失败原因：旧 few-shot 使用不存在的 addr_alias.std_address_id。","textChars":49,"textLines":1,"bbox":[724,286,420,74]}
+{"kind":"textbox","id":"sh/hcrepobm","slide":4,"text":"修正：改为 std_address_code 关联标准地址，并保留 LIKE 过滤。","textPreview":"修正：改为 std_address_code 关联标准地址，并保留 LIKE 过滤。","textChars":42,"textLines":1,"bbox":[724,380,420,48]}
+{"kind":"notes","id":"nt/m0xezk","slide":4,"text":"[Sources]\nbackend/nl2sql/prompt_builder.py; training/xiyan3b_ollama_mvp_optimized_report.json failure analysis"}
+{"kind":"slide","id":"sl/pjamvx","slide":5,"title":"审计链路已经能支撑问题复盘","textShapes":17}
+{"kind":"textbox","id":"sh/076hk7mh","slide":5,"text":"审计链路已经能支撑问题复盘","textPreview":"审计链路已经能支撑问题复盘","textChars":13,"textLines":1,"bbox":[72,48,980,58]}
+{"kind":"shape","id":"sh/z6xgr25c","slide":5,"bbox":[72,130,1136,1.5]}
+{"kind":"shape","id":"sh/y5ozix4r","slide":5,"bbox":[116,178,620,344]}
+{"kind":"textbox","id":"sh/9wzyxcne","slide":5,"text":"审计字段","textPreview":"审计字段","textChars":4,"textLines":1,"bbox":[146,202,300,30]}
+{"kind":"textbox","id":"sh/8b6ho7mt","slide":5,"text":"覆盖情况","textPreview":"覆盖情况","textChars":4,"textLines":1,"bbox":[510,202,160,30]}
+{"kind":"textbox","id":"sh/naxgv258","slide":5,"text":"generated_sql","textPreview":"generated_sql","textChars":13,"textLines":1,"bbox":[146,254,300,26]}
+{"kind":"textbox","id":"sh/m9ozmx4n","slide":5,"text":"33 / 33","textPreview":"33 / 33","textChars":7,"textLines":1,"bbox":[510,254,160,26]}
+{"kind":"textbox","id":"sh/x0zy1wna","slide":5,"text":"executed_sql","textPreview":"executed_sql","textChars":12,"textLines":1,"bbox":[146,296,300,26]}
+{"kind":"textbox","id":"sh/wzqhsrmp","slide":5,"text":"33 / 33","textPreview":"33 / 33","textChars":7,"textLines":1,"bbox":[510,296,160,26]}
+{"kind":"textbox","id":"sh/6907u14r","slide":5,"text":"result_sample_json","textPreview":"result_sample_json","textChars":18,"textLines":1,"bbox":[146,338,300,26]}
+{"kind":"textbox","id":"sh/ra98n6lc","slide":5,"text":"33 / 33","textPreview":"33 / 33","textChars":7,"textLines":1,"bbox":[510,338,160,26]}
+{"kind":"textbox","id":"sh/sbipwbmh","slide":5,"text":"stage_timings_json","textPreview":"stage_timings_json","textChars":18,"textLines":1,"bbox":[146,380,300,26]}
+{"kind":"textbox","id":"sh/tcrqpg32","slide":5,"text":"33 / 33","textPreview":"33 / 33","textChars":7,"textLines":1,"bbox":[510,380,160,26]}
+{"kind":"textbox","id":"sh/ed07y14n","slide":5,"text":"raw_model_output","textPreview":"raw_model_output","textChars":16,"textLines":1,"bbox":[146,422,300,26]}
+{"kind":"textbox","id":"sh/fet8r6l8","slide":5,"text":"30 / 33","textPreview":"30 / 33","textChars":7,"textLines":1,"bbox":[510,422,160,26]}
+{"kind":"textbox","id":"sh/gf2p0bmt","slide":5,"text":"完整五阶段耗时","textPreview":"完整五阶段耗时","textChars":7,"textLines":1,"bbox":[146,464,300,26]}
+{"kind":"textbox","id":"sh/1gbqtg3e","slide":5,"text":"30 / 33","textPreview":"30 / 33","textChars":7,"textLines":1,"bbox":[510,464,160,26]}
+{"kind":"textbox","id":"sh/uhg7mh4j","slide":5,"text":"3 条 REST API 用例走服务编排，不经过 SQL 模型生成，所以没有 raw_model_output 和 SQL generation 阶段；其 API 执行动作、样本和总耗时仍已记录。","textPreview":"3 条 REST API 用例走服务编排，不经过 SQL 模型生成，所以没有 raw_model_output 和 SQL generation 阶段；其 API 执行动作、样本和总耗时仍已记录。","textChars":98,"textLines":1,"bbox":[790,198,330,190]}
+{"kind":"textbox","id":"sh/vipofml4","slide":5,"text":"view_audit.py 已修复 Windows 控制台 Unicode 输出问题。","textPreview":"view_audit.py 已修复 Windows 控制台 Unicode 输出问题。","textChars":43,"textLines":1,"bbox":[790,438,330,72]}
+{"kind":"notes","id":"nt/pjamvx","slide":5,"text":"[Sources]\ndata/audit/2026-07-29/audit_2026-07-29.db direct SQLite audit check; scripts/view_audit.py"}
+{"kind":"slide","id":"sl/8ruq4p","slide":6,"title":"下一步是扩大评估集，再决定是否 QLoRA","textShapes":8}
+{"kind":"textbox","id":"sh/axg3i9kr","slide":6,"text":"下一步是扩大评估集，再决定是否 QLoRA","textPreview":"下一步是扩大评估集，再决定是否 QLoRA","textChars":21,"textLines":1,"bbox":[72,48,1060,58]}
+{"kind":"shape","id":"sh/xkrmdoji","slide":6,"bbox":[72,130,1136,1.5]}
+{"kind":"textbox","id":"sh/cjilkj2x","slide":6,"text":"01","textPreview":"01","textChars":2,"textLines":1,"bbox":[96,190,90,48]}
+{"kind":"textbox","id":"sh/nup47el0","slide":6,"text":"扩展 golden cases 到 80-120 条，提高字段、过滤和分组断言强度。","textPreview":"扩展 golden cases 到 80-120 条，提高字段、过滤和分组断言强度。","textChars":42,"textLines":1,"bbox":[200,192,880,58]}
+{"kind":"textbox","id":"sh/2tg3e9kf","slide":6,"text":"02","textPreview":"02","textChars":2,"textLines":1,"bbox":[96,308,90,48]}
+{"kind":"textbox","id":"sh/pw7m9436","slide":6,"text":"只把人工校验 SQL 写入 training/sft_train.jsonl。","textPreview":"只把人工校验 SQL 写入 training/sft_train.jsonl。","textChars":39,"textLines":1,"bbox":[200,310,880,58]}
+{"kind":"textbox","id":"sh/ovylgz2l","slide":6,"text":"03","textPreview":"03","textChars":2,"textLines":1,"bbox":[96,426,90,48]}
+{"kind":"textbox","id":"sh/7qt4jy1k","slide":6,"text":"用相同独立评估集比较微调前后通过率、语义正确率和 P50/P95。","textPreview":"用相同独立评估集比较微调前后通过率、语义正确率和 P50/P95。","textChars":33,"textLines":1,"bbox":[200,428,880,58]}
+{"kind":"textbox","id":"sh/6p0nqtkz","slide":6,"text":"当前不建议直接训练：MVP baseline 已全通过，训练收益要靠新增独立集证明。","textPreview":"当前不建议直接训练：MVP baseline 已全通过，训练收益要靠新增独立集证明。","textChars":42,"textLines":1,"bbox":[96,560,940,48]}
+{"kind":"notes","id":"nt/8ruq4p","slide":6,"text":"[Sources]\ndocs/NL2SQL_微调数据与QLoRA方案_2026-07-29.md; training/train_qlora_xiyan3b.ps1"}

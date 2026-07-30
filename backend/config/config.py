@@ -281,8 +281,6 @@ class Settings(BaseSettings):
             return self.dashscope_model
 settings = Settings()
 
-os.makedirs("data", exist_ok=True)
-
 if __name__ == "__main__":
 
     print(f"✅ 配置加载成功")

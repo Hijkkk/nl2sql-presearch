@@ -71,10 +71,18 @@ def test_graphql_adapter_exposes_countries_metadata():
 
     metadata = adapter.get_metadata()
 
-    assert metadata["total_tables"] == 1
-    assert metadata["tables"][0]["name"] == "countries"
-    column_names = {column["name"] for column in metadata["tables"][0]["columns"]}
+    assert metadata["total_tables"] == 5
+    tables_by_name = {table["name"]: table for table in metadata["tables"]}
+    assert {
+        "countries",
+        "country_currencies",
+        "country_languages",
+        "dict_continent",
+        "v_country_profile",
+    } <= set(tables_by_name)
+    column_names = {column["name"] for column in tables_by_name["countries"]["columns"]}
     assert {"code", "name", "capital", "currency", "continent_name", "language_names"} <= column_names
+    assert tables_by_name["country_currencies"]["primary_key"] == ["country_code", "currency_code"]
 
 
 def test_graphql_adapter_executes_sql_over_virtual_table_and_reuses_cache():
@@ -92,3 +100,23 @@ def test_graphql_adapter_executes_sql_over_virtual_table_and_reuses_cache():
 
     adapter.get_metadata()
     assert client.calls == 1
+
+
+def test_graphql_adapter_exposes_split_tables_and_profile_view():
+    adapter = make_adapter(FakeGraphQLClient())
+
+    rows, columns = adapter.execute_query(
+        "SELECT currency_code FROM country_currencies "
+        "WHERE country_code = 'US' ORDER BY currency_code"
+    )
+
+    assert columns == ["currency_code"]
+    assert rows == [{"currency_code": "USD"}, {"currency_code": "USN"}, {"currency_code": "USS"}]
+
+    rows, columns = adapter.execute_query(
+        "SELECT country_code, currency_codes, language_names "
+        "FROM v_country_profile WHERE country_code = 'CN'"
+    )
+
+    assert columns == ["country_code", "currency_codes", "language_names"]
+    assert rows == [{"country_code": "CN", "currency_codes": "CNY", "language_names": "Chinese"}]

@@ -2,6 +2,7 @@
 主应用入口 - FastAPI
 整合 NL2SQL + 多数据源 + 安全 + 审计
 """
+# 导入标准库 不会创建 app、不会跑中间件、不会监听端口。
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -9,6 +10,8 @@ from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
 from loguru import logger
 
+# 触发链：backend/__init__.py(空) → backend/adapters/__init__.py(空) → registry.py 执行
+# Python 没有"按需加载函数"这回事。模块是整体加载的，from 只是从已经加载完的命名空间里挑一个名字绑到当前作用域
 from backend.adapters.registry import get_adapter
 from backend.config.config import settings
 from backend.config.audit import init_audit_db

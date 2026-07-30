@@ -120,11 +120,11 @@ class SQLiteAdapter(BaseDataSourceAdapter):
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         # # 第1步：执行查询，找出所有用户创建的表名
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+        cursor.execute("SELECT name, type FROM sqlite_master WHERE type IN ('table', 'view') AND name NOT LIKE 'sqlite_%' ORDER BY type, name")
         tables = []  # 用于存储表元数据
 
         # 遍历所有表名
-        for (table_name,) in cursor.fetchall():
+        for (table_name, object_type) in cursor.fetchall():
             # # 第2步：获取表的列信息
             # 用于存储列元数据
             # PRAGMA table_info 是 SQLite 的特殊命令，用来查询表的结构。
@@ -180,6 +180,7 @@ class SQLiteAdapter(BaseDataSourceAdapter):
             tables.append({
                 "name": table_name,
                 "comment": self._get_table_comment(table_name),
+                "object_type": "view" if object_type == "view" else "table",
                 "columns": columns,
                 # 遍历 columns，如果某列的 "pk" 为 True（是主键），就把它的 "name" 取出来，组成一个列表。
                 "primary_key": [c["name"] for c in columns if c["pk"]],

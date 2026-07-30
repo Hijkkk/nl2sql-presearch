@@ -38,6 +38,8 @@ ADAPTERS: dict[str, BaseDataSourceAdapter] = {}
        ADAPTERS["sqlite_demo"] = SQLiteAdapter(...)
     3. 返回 ADAPTERS["sqlite_demo"]
 """
+
+
 def get_adapter(data_source: str) -> BaseDataSourceAdapter:
     if data_source not in ADAPTERS:
         if data_source == "sqlite_demo":
@@ -174,6 +176,8 @@ def get_adapter(data_source: str) -> BaseDataSourceAdapter:
                     detail=f"GraphQL 数据源 {data_source} 未启用"
                 )
             try:
+                # 调用有权限验证的 GraphQL API
+                # 解析为 dict 判断是否为字典格式
                 headers = json.loads(settings.graphql_headers_json or "{}")
                 if not isinstance(headers, dict):
                     raise ValueError("GRAPHQL_HEADERS_JSON 必须是 JSON 对象")
@@ -187,14 +191,21 @@ def get_adapter(data_source: str) -> BaseDataSourceAdapter:
                 )
 
             ADAPTERS[data_source] = GraphQLAdapter(
+                # 适配器唯一标识，存入 ADAPTERS dict
                 name=settings.graphql_name,
                 endpoint=settings.graphql_endpoint,
+                # 把 GraphQL 数据映射成什么"虚拟表"名
                 table_name=settings.graphql_table_name,
+                # 这就是告诉 GraphQL 服务"我要哪些字段"。
                 query=settings.graphql_query or DEFAULT_COUNTRIES_QUERY,
+                # data_path = "data.countries" 就是按 . 一层层下钻拿到数组
                 data_path=settings.graphql_data_path,
+                # headers 和 variables（需要认证 / 参数化时用）
                 headers={str(key): str(value) for key, value in headers.items()},
                 variables=variables,
+                # HTTP 请求超时（秒）
                 timeout=settings.graphql_timeout,
+                # 默认 1 小时缓存对静态数据
                 cache_ttl_seconds=settings.graphql_cache_ttl_seconds,
             )
         else:
@@ -203,4 +214,3 @@ def get_adapter(data_source: str) -> BaseDataSourceAdapter:
                 detail=f"数据源 {data_source} 不存在或未配置"
             )
     return ADAPTERS[data_source]
-
