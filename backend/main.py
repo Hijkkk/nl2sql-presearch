@@ -48,7 +48,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="NL2SQL 智能查询系统 (预研版)",
+    title="NL2SQL 智能查询系统",
     description="基于公司内部模型 / Qwen 的多数据源自然语言查询系统 - 可行性预研",
     version="0.1.0-mvp",
     lifespan=lifespan

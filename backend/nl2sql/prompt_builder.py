@@ -71,7 +71,7 @@ LIMIT 10;
 4. 复杂统计必须使用 GROUP BY + 聚合函数（COUNT、SUM、AVG、MAX、MIN）。
 5. 支持子查询、窗口函数（ROW_NUMBER、RANK 等）、递归CTE（树形结构）。
 6. 结果要易读，必须合理使用中文别名（AS）。如果用户使用中文提问，SELECT 列表中的业务字段应尽量输出中文列名，例如 trade_date AS 交易日期、open_price AS 开盘价、close_price AS 收盘价、volume AS 成交量。
-7. 不要臆造元数据中不存在的字段。比如股票行情表只有 symbol 时，只能返回股票代码；如果没有股票名称/中文名字段，不要生成 stock_name、股票名称 等不存在的列。
+7. 不要臆造元数据中不存在的字段。比如股票行情表只有 symbol 时，只能返回股票代码；如果没有股票名称/中文名字段，不要生成 stock_name、股票名称 等不存在的列。字段必须属于其 FROM/JOIN 后的对象：视图专属别名只能用于该视图，不能写到同名业务基表上；基表字段也不能假定存在于视图中。
 8. 只输出一条 SQL，可以使用 ```sql 代码块，也可以直接输出裸 SQL。
 9. 不要输出解释、推理过程、自然语言前缀或多余文本。
 
@@ -421,9 +421,15 @@ WHERE alert_content LIKE '%张三%';
             evidence_items.append(
                 "用户问“各城市/所有城市/全部城市 + 已完成订单金额”时，必须返回所有客户城市，包括没有已完成订单的城市；从 customers c 出发 LEFT JOIN orders o，并把 o.status = 'COMPLETED' 与年份范围条件写在 ON 子句中，金额用 COALESCE(SUM(o.total_amount), 0)，不要把订单条件写在 WHERE 中导致无订单城市被过滤。"
             )
+            evidence_items.append(
+                "v_order_summary 的城市字段是 customer_city；customers 基表的字段是 city。使用视图时写 customer_city，使用 customers c 基表时必须写 c.city，绝不能写 c.customer_city。"
+            )
         elif data_source == "dameng_ecommerce":
             evidence_items.append(
                 "用户问“各城市/所有城市/全部城市 + 已完成订单金额”时，必须返回所有客户城市，包括没有已完成订单的城市；从 CUSTOMERS C 出发 LEFT JOIN ORDERS O，并把 O.STATUS = 'COMPLETED' 与年份范围条件写在 ON 子句中，金额用 COALESCE(SUM(O.TOTAL_AMOUNT), 0)，不要把订单条件写在 WHERE 中导致无订单城市被过滤。"
+            )
+            evidence_items.append(
+                "V_ORDER_SUMMARY 的城市字段是 CUSTOMER_CITY；CUSTOMERS C 基表的字段是 CITY。使用视图时写 CUSTOMER_CITY，使用基表时必须写 C.CITY，绝不能写 C.CUSTOMER_CITY。"
             )
         evidence_text = "\n".join(evidence_items)
         return f"""你是一名{dialect}专家，现在需要阅读并理解下面的【数据库schema】描述，以及可能用到的【参考信息】，并运用{dialect}知识生成sql语句回答【用户问题】。

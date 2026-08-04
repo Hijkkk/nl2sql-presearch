@@ -1,5 +1,6 @@
 import os
 import sys
+from types import SimpleNamespace
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
@@ -8,7 +9,9 @@ from backend.config.audit import audit_db_path, prepare_result_sample
 from backend.models.models import ChatResponse
 from backend.nl2sql.prompt_builder import PromptBuilder
 from backend.nl2sql.sql_generator import SQLGenerator
+from backend.nl2sql.table_selector import select_relevant_tables
 from backend.routers.chat_module import response_for_client
+from backend.crud.conversation import to_message_out
 from backend.config.config import settings
 
 
@@ -54,6 +57,21 @@ def test_template_summary_handles_empty_aggregate_and_topn():
     assert "员工数" in small_table
 
 
+def test_result_summary_uses_configured_dashscope_flash_when_key_is_available(monkeypatch):
+    generator = SQLGenerator()
+    monkeypatch.setattr(settings, "dashscope_base_url", "https://dashscope.example/v1")
+    monkeypatch.setattr(settings, "dashscope_api_key", "test-key")
+    monkeypatch.setattr(settings, "result_summary_model", "qwen3.7-flash")
+
+    base_url, model, api_key = generator._resolve_model_config(
+        generator.RESULT_SUMMARY_DASHSCOPE_MODEL_ID
+    )
+
+    assert base_url == "https://dashscope.example/v1"
+    assert model == "qwen3.7-flash"
+    assert api_key == "test-key"
+
+
 def test_source_sql_patches_use_half_open_year_range_and_correct_demo_queries():
     generator = SQLGenerator()
 
@@ -87,6 +105,48 @@ def test_source_sql_patches_use_half_open_year_range_and_correct_demo_queries():
     )
     assert "LEFT JOIN alert_event e ON e.alert_no = a.alert_no" in event_sql
     assert "a.alert_status_code = 'CLOSED'" in event_sql
+
+
+def test_ecommerce_uses_view_first_and_never_applies_view_city_field_to_customers():
+    metadata = {
+        "tables": [
+            {"name": "customers", "columns": [{"name": "id"}, {"name": "city"}]},
+            {"name": "orders", "columns": [{"name": "id"}, {"name": "customer_id"}]},
+            {
+                "name": "v_order_summary",
+                "object_type": "view",
+                "columns": [{"name": "customer_city"}, {"name": "total_amount"}],
+            },
+        ]
+    }
+    question = "统计 2024 年各城市已完成订单的销售额和订单数。"
+    selected = select_relevant_tables(
+        question,
+        metadata,
+        max_tables=3,
+        data_source="gauss_ecommerce",
+    )
+    assert selected[0] == "v_order_summary"
+    assert len(selected) <= 3
+
+    generator = SQLGenerator()
+    corrected = generator._apply_source_sql_patches(
+        "SELECT c.customer_city, SUM(o.total_amount) FROM customers c "
+        "LEFT JOIN orders o ON c.id = o.customer_id GROUP BY c.customer_city",
+        "按客户城市查看订单",
+        "gauss_ecommerce",
+    )
+    assert "c.customer_city" not in corrected
+    assert "c.city" in corrected
+
+    standard_query = generator._apply_source_sql_patches(
+        "SELECT 1",
+        question,
+        "gauss_ecommerce",
+    )
+    assert "FROM customers c" in standard_query
+    assert "c.city AS city" in standard_query
+    assert "COUNT(o.id) AS order_count" in standard_query
 
 
 def test_demo_patches_cover_police_stock_hadoop_and_translated_summary():
@@ -171,6 +231,31 @@ def test_debug_output_flag_hides_client_only_fields(monkeypatch):
     visible = response_for_client(response)
     assert visible.sql == "SELECT COUNT(*) FROM employees;"
     assert visible.stage_timings == {"metadata": 0.1}
+
+
+def test_conversation_history_always_returns_persisted_execution_time(monkeypatch):
+    """History replay must keep the elapsed time even when debug details are hidden."""
+    message = SimpleNamespace(
+        id="msg_elapsed",
+        role="ai",
+        content="查询完成。",
+        sql_text="SELECT 1",
+        columns_json=["value"],
+        results_json=[{"value": 1}],
+        row_count=1,
+        execution_time=2.345,
+        insight="结果说明",
+        success=True,
+        error_message=None,
+        created_at="2026-07-31T10:00:00",
+    )
+
+    monkeypatch.setattr(settings, "nl2sql_debug_output", False)
+    history_message = to_message_out(message)
+
+    assert history_message.execution_time == 2.345
+    assert history_message.sql is None
+    assert history_message.insight is None
 
 
 def test_postgres_metadata_cache_status_and_clear():

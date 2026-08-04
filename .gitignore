@@ -29,4 +29,12 @@ data/
 # Logs
 *.log
 
+.codex_tmp
+
+docs
+
+scripts
+
+tests
+
 

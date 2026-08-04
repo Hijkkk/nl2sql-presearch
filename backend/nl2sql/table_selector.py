@@ -44,7 +44,7 @@ def _is_semantic_view(table_name: str, table_lookup: Dict[str, Dict[str, Any]]) 
 def select_relevant_tables(
     question: str, 
     metadata: Dict[str, Any], 
-    max_tables: int = 5,
+    max_tables: int = 3,
     data_source: str = "",
 ) -> List[str]:
     """
@@ -189,6 +189,21 @@ def select_relevant_tables(
         ]
         selected = list(dict.fromkeys(semantic_views + selected + relevant_preferred))[:max_tables]
 
+    # 汇总视图已经将 customers.city、订单状态和金额等跨表字段统一命名，
+    # 对城市销售/订单统计优先把它放入 prompt，避免模型把 customer_city
+    # （视图字段）错误写到 customers（基表）上。
+    if data_source in {"gauss_ecommerce", "dameng_ecommerce"}:
+        order_summary = next(
+            (name for name in preferred_objects if name.lower() == "v_order_summary"),
+            None,
+        )
+        wants_order_summary = any(
+            keyword in question_lower
+            for keyword in ("城市", "销售", "订单数", "订单金额", "订单总额", "消费")
+        )
+        if order_summary and wants_order_summary:
+            selected = list(dict.fromkeys([order_summary] + selected))[:max_tables]
+
     # 第一层	语义视图关键词匹配	优先使用预定义的聚合视图
     # 第二层	Hadoop 大数据表匹配	匹配大数据场景
     # 第三层	police 表分组匹配	精准匹配警务表结构
@@ -273,4 +288,3 @@ def select_relevant_tables(
     
     logger.info(f"表选择结果: {selected} (原始表数: {len(tables)})")
     return selected
-

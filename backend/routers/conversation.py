@@ -15,6 +15,7 @@ router = APIRouter(prefix="/api/v1/conversations", tags=["conversation"])
 async def list_conversations(
     page: int = Query(default=1, ge=1),
     pageSize: int = Query(default=20, ge=1, le=100),
+    search: str = Query(default="", max_length=100),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse:
@@ -29,6 +30,7 @@ async def list_conversations(
         user_id=current_user.id,
         page=page,
         page_size=pageSize,
+        search=search,
     )
     return ApiResponse(
         code=200,

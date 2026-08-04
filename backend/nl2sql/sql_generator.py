@@ -16,6 +16,7 @@ from backend.nl2sql.table_selector import select_relevant_tables
 class SQLGenerator:
     DEFAULT_MODEL_ID = "qwen3-coder-next-fp8"
     DASHSCOPE_MODEL_ID = "qwen3.7-max"
+    RESULT_SUMMARY_DASHSCOPE_MODEL_ID = "result-summary-dashscope"
     XIYAN_OLLAMA_MODEL_ID = "xiyan-sql-3b-ollama"
     XIYAN_FINETUNE_MODEL_ID = "xiyan-sql-3b-finetune"
     # Backward compatible alias used by the first 3B integration.
@@ -65,6 +66,12 @@ class SQLGenerator:
                 settings.dashscope_model,
                 settings.dashscope_api_key,
             )
+        if model_id == self.RESULT_SUMMARY_DASHSCOPE_MODEL_ID:
+            return (
+                settings.dashscope_base_url.rstrip("/"),
+                settings.result_summary_model,
+                settings.dashscope_api_key,
+            )
         return (
             settings.litellm_base_url.rstrip("/"),
             settings.litellm_model,
@@ -97,8 +104,8 @@ class SQLGenerator:
         :param model_config:
         :return:
         """
-        # 四张表足以覆盖当前主要多表链路，避免无关表扩大 Prompt。
-        relevant_tables = select_relevant_tables(question, metadata, max_tables=4, data_source=data_source)
+        # 三个对象足以覆盖当前 MVP 的主链路，避免无关 schema 扩大 Prompt。
+        relevant_tables = select_relevant_tables(question, metadata, max_tables=3, data_source=data_source)
         trace = {
             "rag_enabled": False,
             "rag_hits": [],
@@ -281,10 +288,10 @@ class SQLGenerator:
         model_id: Optional[str] = None,
         model_config: Optional[Dict[str, Any]] = None,
     ) -> str:
-        """Generate the user-facing answer from verified result rows only."""
-        template_answer = self._try_template_summary(question, columns, results)
-        if template_answer:
-            return template_answer
+        """总结会话"""
+        # template_answer = self._try_template_summary(question, columns, results)
+        # if template_answer:
+        #     return template_answer
 
         templates = {
             "brief": "用 2 到 4 句话给出直接结论。",
@@ -303,21 +310,39 @@ class SQLGenerator:
             f"用户自定义指令：{instruction}"
         )
         try:
-            base_url, model, api_key = self._resolve_model_config(model_id)
+            # 摘要仅在 DashScope 密钥可用时分流；未配置密钥时保留原有模型，
+            # 以免一次可选性能优化让已运行的查询流程直接失败。
+            use_dashscope_summary = bool(
+                settings.result_summary_dashscope_enabled and settings.dashscope_api_key
+            )
+            resolved_model_id = (
+                self.RESULT_SUMMARY_DASHSCOPE_MODEL_ID
+                if use_dashscope_summary
+                else model_id
+            )
+            base_url, model, api_key = self._resolve_model_config(resolved_model_id)
             model_config = model_config or {}
             headers = {"Content-Type": "application/json"}
             if api_key:
                 headers["Authorization"] = f"Bearer {api_key}"
+            max_tokens = (
+                settings.result_summary_max_tokens
+                if use_dashscope_summary
+                else min(int(model_config.get("max_tokens", 512)), 1024)
+            )
+            payload = {
+                "model": model,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": float(model_config.get("temperature", 0.2)),
+                "top_p": float(model_config.get("top_p", 0.8)),
+                "max_tokens": max(16, max_tokens),
+                "stream": False,
+            }
+            if use_dashscope_summary:
+                payload["enable_thinking"] = settings.result_summary_enable_thinking
             response = self.client.post(
                 f"{base_url}/chat/completions",
-                json={
-                    "model": model,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "temperature": float(model_config.get("temperature", 0.2)),
-                    "top_p": float(model_config.get("top_p", 0.8)),
-                    "max_tokens": min(int(model_config.get("max_tokens", 512)), 1024),
-                    "stream": False,
-                },
+                json=payload,
                 headers=headers,
             )
             response.raise_for_status()
@@ -439,6 +464,7 @@ class SQLGenerator:
         elif data_source == "hive_hadoop_demo":
             sql = self._patch_hadoop_demo_queries(sql, question)
         if data_source in {"gauss_ecommerce", "dameng_ecommerce"}:
+            sql = self._patch_ecommerce_base_table_view_columns(sql, data_source)
             return self._patch_ecommerce_city_completed_amount(sql, question, data_source)
         if data_source not in {"mysql_police_address", "police_address"}:
             return sql
@@ -705,8 +731,10 @@ LIMIT 200;
 
     def _patch_ecommerce_city_completed_amount(self, sql: str, question: str, data_source: str) -> str:
         wants_city_breakdown = any(word in question for word in ("各城市", "每个城市", "所有城市", "全部城市"))
-        wants_completed_amount = "已完成" in question and any(word in question for word in ("订单金额", "销售额", "订单总额"))
-        year_match = re.search(r"(20\d{2})年", question)
+        wants_completed_amount = "已完成" in question and any(
+            word in question for word in ("订单金额", "销售额", "销售总额", "订单总额")
+        )
+        year_match = re.search(r"(20\d{2})\s*年", question)
         if not (wants_city_breakdown and wants_completed_amount and year_match):
             return sql
 
@@ -715,7 +743,8 @@ LIMIT 200;
             return f"""
 SELECT
   C.CITY AS CITY,
-  COALESCE(SUM(O.TOTAL_AMOUNT), 0) AS COMPLETED_ORDER_AMOUNT
+  COALESCE(SUM(O.TOTAL_AMOUNT), 0) AS TOTAL_SALES,
+  COUNT(O.ID) AS ORDER_COUNT
 FROM CUSTOMERS C
 LEFT JOIN ORDERS O
   ON O.CUSTOMER_ID = C.ID
@@ -723,13 +752,14 @@ LEFT JOIN ORDERS O
   AND O.ORDER_DATE >= DATE '{year}-01-01'
   AND O.ORDER_DATE < DATE '{year + 1}-01-01'
 GROUP BY C.CITY
-ORDER BY COMPLETED_ORDER_AMOUNT DESC;
+ORDER BY TOTAL_SALES DESC, CITY;
 """.strip()
 
         return f"""
 SELECT
   c.city AS city,
-  COALESCE(SUM(o.total_amount), 0) AS completed_order_amount
+  COALESCE(SUM(o.total_amount), 0) AS total_sales,
+  COUNT(o.id) AS order_count
 FROM customers c
 LEFT JOIN orders o
   ON o.customer_id = c.id
@@ -737,8 +767,35 @@ LEFT JOIN orders o
   AND o.order_date >= DATE '{year}-01-01'
   AND o.order_date < DATE '{year + 1}-01-01'
 GROUP BY c.city
-ORDER BY completed_order_amount DESC;
+ORDER BY total_sales DESC, city;
 """.strip()
+
+    @staticmethod
+    def _patch_ecommerce_base_table_view_columns(sql: str, data_source: str) -> str:
+        """Keep view-only aliases out of the customers base table.
+
+        `customer_city` is an output field of the order-summary views.  The
+        underlying `customers` table uses `city`, so applying the view alias to
+        a customers alias causes PostgreSQL/DM column-not-found failures.
+        """
+        if not re.search(r"\b(?:FROM|JOIN)\s+customers\b", sql, re.IGNORECASE):
+            return sql
+
+        aliases = re.findall(
+            r"\b(?:FROM|JOIN)\s+customers\s+(?:AS\s+)?([A-Za-z_]\w*)",
+            sql,
+            re.IGNORECASE,
+        )
+        aliases.append("customers")
+        patched = sql
+        for alias in dict.fromkeys(aliases):
+            patched = re.sub(
+                rf"\b{re.escape(alias)}\.customer_city\b",
+                f"{alias}.city",
+                patched,
+                flags=re.IGNORECASE,
+            )
+        return patched
 
     def _patch_police_current_address_views(self, sql: str, question: str) -> str:
         current_views = ("v_nl2sql_person_current_address", "v_nl2sql_house_occupancy")
@@ -888,8 +945,16 @@ ORDER BY completed_order_amount DESC;
                                question: str, metadata: Dict[str, Any],
                                dialect: str = "sqlite",
                                model_id: Optional[str] = None,
-                               model_config: Optional[Dict[str, Any]] = None) -> Tuple[str, str]:
+                               model_config: Optional[Dict[str, Any]] = None,
+                               data_source: str = "") -> Tuple[str, str]:
         """Ask the selected LLM to repair a failed read-only SQL statement."""
+        relevant_tables = select_relevant_tables(
+            question,
+            metadata,
+            max_tables=3,
+            data_source=data_source,
+        )
+        schema_text = self.prompt_builder._format_metadata(metadata, relevant_tables)
         correction_prompt = f"""之前的SQL执行失败了，请根据错误信息修复。
 
 用户原始问题：{question}
@@ -901,6 +966,9 @@ ORDER BY completed_order_amount DESC;
 
 执行错误信息：
 {error_msg}
+
+本次可用的真实 schema（字段只能属于其 FROM/JOIN 后的对象；视图字段不能写到基表）：
+{schema_text}
 
 请分析错误原因，然后生成修正后的正确SQL。保持只读规则（只允许 SELECT / WITH）。
 只输出修正后的SQL（用```sql包裹）和简短修复说明。"""
@@ -925,7 +993,9 @@ ORDER BY completed_order_amount DESC;
             response.raise_for_status()
             content = response.json()["choices"][0]["message"]["content"]
             _, corrected_sql = self._extract_thought_and_sql(content)
-            return self._clean_sql(corrected_sql), content[:300]
+            corrected_sql = self._clean_sql(corrected_sql)
+            corrected_sql = self._apply_source_sql_patches(corrected_sql, question, data_source)
+            return corrected_sql, content[:300]
         except Exception as e:
             logger.error(f"Self-correction failed: {e}")
             return "", str(e)

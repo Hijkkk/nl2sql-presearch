@@ -539,6 +539,7 @@ async def chat(
                     dialect,
                     model_id=request.model_id,
                     model_config=request.model_conf,
+                    data_source=request.data_source,
                 )
                 corrected_sql_for_audit = corrected_sql or None
                 if corrected_sql:

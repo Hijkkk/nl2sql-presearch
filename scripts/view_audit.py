@@ -7,7 +7,7 @@ E:\SoftWare\anaconda\envs\fastapi_project\python.exe scripts\view_audit.py
 查看指定日期：
 E:\SoftWare\anaconda\envs\fastapi_project\python.exe scripts\view_audit.py --date 2026-07-28
 限制条数：
-E:\SoftWare\anaconda\envs\fastapi_project\python.exe scripts\view_audit.py --date 2026-07-29 --limit 5
+E:\SoftWare\anaconda\envs\fastapi_project\python.exe scripts\view_audit.py --date 2026-07-31 --limit 1
 列出已有日期：
 E:\SoftWare\anaconda\envs\fastapi_project\python.exe scripts\view_audit.py --list-dates
 旧审计仍在：
@@ -79,8 +79,8 @@ def list_audit_dates() -> None:
 
 def main() -> None:
     # ================= 硬编码配置区域 =================
-    AUDIT_DATE = "2026-07-30"  # 修改这里查看指定日期
-    LIMIT = 2                 # 显示最近 N 条
+    AUDIT_DATE = "2026-07-31"  # 修改这里查看指定日期
+    LIMIT = 1                 # 显示最近 N 条
     # ================================================
 
     parser = argparse.ArgumentParser(description="查看 NL2SQL 审计记录")

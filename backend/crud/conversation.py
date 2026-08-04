@@ -44,7 +44,9 @@ def to_message_out(message: ConversationMessage) -> ConversationMessageOut:
         columns=message.columns_json,
         results=message.results_json,
         row_count=message.row_count,
-        execution_time=message.execution_time if show_debug else None,
+        # 耗时属于请求状态，不是 SQL / 模型解释等调试内容。历史会话必须始终返回它，
+        # 否则 NL2SQL_DEBUG_OUTPUT=false 时前端重新打开会话会显示“耗时：-”。
+        execution_time=message.execution_time,
         insight=message.insight if show_debug else None,
         success=message.success,
         error=message.error_message if show_debug else None,
@@ -148,6 +150,7 @@ async def list_conversations(
     user_id: int,
     page: int,
     page_size: int,
+    search: str = "",
 ) -> tuple[list[ConversationSummary], int]:
     # 防止前端传恶意参数（如 page=-999、page_size=100000）导致数据库压力过大或返回异常数据。
     # 防止页码 ≤ 0，最小取 1
@@ -156,10 +159,12 @@ async def list_conversations(
     page_size = min(max(page_size, 1), 100)
     # 计算分页偏移量
     offset = (page - 1) * page_size
+    keyword = search.strip()
+    filters = [Conversation.user_id == user_id]
+    if keyword:
+        filters.append(Conversation.title.ilike(f"%{keyword}%"))
     # 查询总数
-    total_stmt = select(func.count()).select_from(Conversation).where(
-        Conversation.user_id == user_id
-    )
+    total_stmt = select(func.count()).select_from(Conversation).where(*filters)
     # 执行查询
     total = await db.scalar(total_stmt) or 0
 
@@ -168,7 +173,7 @@ async def list_conversations(
     # 相同则按 created_at 降序：如果更新时间一样，新建的排前面
     stmt = (
         select(Conversation)
-        .where(Conversation.user_id == user_id)
+        .where(*filters)
         .order_by(Conversation.updated_at.desc(), Conversation.created_at.desc())
         .offset(offset)
         .limit(page_size)

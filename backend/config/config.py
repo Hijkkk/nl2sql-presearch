@@ -47,6 +47,16 @@ class Settings(BaseSettings):
     dashscope_api_key: str = Field(default="", alias="DASHSCOPE_API_KEY")
     dashscope_model: str = Field(default="qwen3.7-max", alias="DASHSCOPE_MODEL")
 
+    # 结果总结与 SQL 生成是两个不同任务：前者应使用低延迟、非思考的通用模型，
+    # 不再占用 XiYanSQL 这个专用 Text-to-SQL 模型。
+    result_summary_dashscope_enabled: bool = Field(default=True, alias="RESULT_SUMMARY_DASHSCOPE_ENABLED")
+    result_summary_model: str = Field(
+        default="qwen3.7-flash",
+        alias="RESULT_SUMMARY_MODEL",
+    )
+    result_summary_max_tokens: int = Field(default=96, alias="RESULT_SUMMARY_MAX_TOKENS")
+    result_summary_enable_thinking: bool = Field(default=False, alias="RESULT_SUMMARY_ENABLE_THINKING")
+
 
     # ==================== 本地 XiYanSQL 3B 配置（≤7B 课题约束） ====================
     xiyan_sql_3b_enabled: bool = Field(default=True, alias="XIYAN_SQL_3B_ENABLED")
