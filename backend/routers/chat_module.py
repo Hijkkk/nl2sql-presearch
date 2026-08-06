@@ -18,6 +18,7 @@ from loguru import logger
 from backend.nl2sql.sql_generator import SQLGenerator
 from backend.nl2sql.metadata_summarizer import MetadataSummarizer
 from backend.api_services.amap_lbs_service import AmapLBSService
+from backend.api_services.gauss_city_fusion_service import GaussCityFusionService
 from backend.security.query_guard import QueryGuard
 
 router = APIRouter(prefix="/api/v1", tags=["chat_module"])
@@ -25,6 +26,7 @@ router = APIRouter(prefix="/api/v1", tags=["chat_module"])
 sql_generator = SQLGenerator()
 metadata_summarizer = MetadataSummarizer()
 amap_lbs_service = AmapLBSService()
+gauss_city_fusion_service = GaussCityFusionService(amap_lbs_service)
 
 
 def response_for_client(response: ChatResponse) -> ChatResponse:
@@ -159,8 +161,8 @@ async def list_models():
         {
             "id": SQLGenerator.XIYAN_FINETUNE_MODEL_ID,
             "name": settings.xiyan_finetune_model,
-            "provider": "本地微调服务",
-            "description": "Transformers / QLoRA 微调版 XiYanSQL 3B，用于训练对比",
+            "provider": "本地 Ollama（LoRA Q4_K_M）",
+            "description": "基于 XiYanSQL 3B LoRA 微调并量化的 NL2SQL 模型",
             "max_context": 32768,
             "enabled": settings.xiyan_finetune_enabled,
         },
@@ -316,6 +318,37 @@ async def chat(
         return response_for_client(response)
 
     try:
+        # 融合路径：用户授权的浏览器定位 -> 高德逆地理编码 -> 参数化 Gauss 查询。
+        # 不将定位文本交给模型拼接 SQL，也不影响普通 Gauss NL2SQL 查询。
+        if gauss_city_fusion_service.can_handle(request.question, request.data_source):
+            response = gauss_city_fusion_service.answer(
+                request.question,
+                request.client_location,
+                adapter,
+            )
+            result_columns, result_sample, result_truncated = prepare_result_sample(
+                response.columns or [], response.results or []
+            )
+            log_audit(
+                question=request.question,
+                generated_sql=response.sql or "",
+                executed_sql=response.sql or "",
+                data_source=request.data_source,
+                row_count=response.row_count or 0,
+                status="success" if response.success else "failed",
+                error_message=response.error,
+                execution_time=response.execution_time or 0,
+                model_id=request.model_id,
+                raw_model_output="[系统融合查询：未调用 SQL 生成模型]",
+                llm_thought=response.llm_thought,
+                stage_timings=response.stage_timings or {},
+                query_guard_passed=True if response.success else None,
+                result_columns=result_columns,
+                result_sample=result_sample,
+                result_truncated=result_truncated,
+            )
+            return await persist_response(response)
+
         # 高德地图LBS服务
         if (
             request.data_source == settings.rest_api_name  # 获取请求源 REST API NAME

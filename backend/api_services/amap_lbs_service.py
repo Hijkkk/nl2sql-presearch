@@ -59,6 +59,43 @@ class AmapLBSService:
         # any() 是 Python 内置函数，只要 iterable 中有一个元素为 True，就返回 True，否则返回 False。
         return any(keyword in question.lower() for keyword in keywords)
 
+    def resolve_city_from_client_location(self, client_location: Optional[Dict[str, Any]]) -> Dict[str, str]:
+        """Resolve browser coordinates to the city format used by business tables.
+
+        This is deliberately separate from ``answer``: a business query needs
+        only the normalized city as an input parameter, not a free-form LBS
+        response.  The current Gauss demo stores names without the trailing
+        Chinese ``市`` (for example, ``成都``), so that suffix is removed here.
+        """
+        if not self.api_key:
+            raise ValueError("高德 API 未配置密钥，无法根据浏览器定位解析城市")
+        if not client_location:
+            raise ValueError("未获得浏览器定位授权，无法按所在城市查询")
+
+        location = self._format_client_location(client_location)
+        payload = self._get("/v3/geocode/regeo", {"location": location, "output": "JSON"})
+        regeocode = payload.get("regeocode") or {}
+        component = regeocode.get("addressComponent") or {}
+        raw_city = component.get("city") or component.get("province") or ""
+        if isinstance(raw_city, list):
+            raw_city = raw_city[0] if raw_city else ""
+        city = self.normalize_business_city(str(raw_city))
+        if not city:
+            raise ValueError("高德逆地理编码未返回城市，无法查询高斯客户数据")
+
+        return {
+            "city": city,
+            "raw_city": str(raw_city),
+            "adcode": str(component.get("adcode") or ""),
+            "formatted_address": str(regeocode.get("formatted_address") or ""),
+        }
+
+    @staticmethod
+    def normalize_business_city(city: str) -> str:
+        """Normalize Amap city labels to the Gauss ``customers.city`` convention."""
+        normalized = re.sub(r"\s+", "", city or "")
+        return normalized[:-1] if normalized.endswith("市") else normalized
+
     # 处理用户问题，返回 ChatResponse。
 
     def answer(self, question: str, client_location: Optional[Dict[str, Any]] = None) -> ChatResponse:

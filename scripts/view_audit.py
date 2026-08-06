@@ -7,7 +7,7 @@ E:\SoftWare\anaconda\envs\fastapi_project\python.exe scripts\view_audit.py
 查看指定日期：
 E:\SoftWare\anaconda\envs\fastapi_project\python.exe scripts\view_audit.py --date 2026-07-28
 限制条数：
-E:\SoftWare\anaconda\envs\fastapi_project\python.exe scripts\view_audit.py --date 2026-07-31 --limit 1
+E:\SoftWare\anaconda\envs\fastapi_project\python.exe scripts\view_audit.py --date 2026-08-05 --limit 1
 列出已有日期：
 E:\SoftWare\anaconda\envs\fastapi_project\python.exe scripts\view_audit.py --list-dates
 旧审计仍在：
@@ -33,6 +33,7 @@ from backend.config.audit import audit_db_path, audit_root_dir, init_audit_db
 
 SEPARATOR = "=" * 88
 STAGE_LABELS = {
+    "location_resolution": "高德定位城市解析",
     "metadata": "元数据读取与构建",
     "sql_generation": "大模型生成 SQL",
     "database": "数据库执行 SQL",
