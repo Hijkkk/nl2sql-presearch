@@ -6,6 +6,8 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 from backend.nl2sql.prompt_builder import PromptBuilder
 from backend.nl2sql.sql_generator import SQLGenerator
+from backend.config.config import settings
+from backend.agent.contracts import XiYanPromptContext
 
 
 def build_sample_metadata():
@@ -238,6 +240,50 @@ def test_prompt_builder_creates_xiyan_prompt_without_cot():
     assert prompt.rstrip().endswith("```sql")
 
 
+def test_prompt_builder_renders_existing_xiyan_rules_from_controlled_context():
+    metadata = {
+        "total_tables": 1,
+        "tables": [{
+            "name": "v_nl2sql_alert_detail",
+            "comment": "警情明细视图",
+            "columns": [{"name": "alert_no", "type": "TEXT", "comment": "警情编号"}],
+            "foreign_keys": [],
+        }],
+    }
+    context = XiYanPromptContext(
+        source_id="mysql_police_address",
+        dialect="MySQL",
+        schema_signature="test-schema-v1",
+        question="统计本月警情数量",
+        schema_closure_object_ids=["v_nl2sql_alert_detail"],
+        allowed_field_ids=["v_nl2sql_alert_detail.alert_no"],
+        max_rows=1000,
+    )
+
+    prompt = PromptBuilder().build_controlled_xiyan_prompt(context, metadata)
+
+    assert "Source: mysql_police_address; dialect: MySQL" in prompt
+    assert "v_nl2sql_alert_detail(alert_no TEXT)" in prompt
+    assert "警务报警统计优先使用 v_nl2sql_alert_detail" in prompt
+    assert "COUNT(DISTINCT alert_no)" in prompt
+    assert prompt.rstrip().endswith("```sql")
+
+
+def test_controlled_xiyan_prompt_includes_approved_task_contract():
+    metadata = {"tables": [{"name": "police_alert", "columns": [{"name": "alert_time", "type": "DATETIME"}]}]}
+    context = XiYanPromptContext(
+        source_id="mysql_police_address", dialect="MySQL", question="query",
+        task_goal="January alert detail", required_object_ids=["police_alert", "alert_involvement"],
+        planned_output_fields=["police_alert.alert_no"], schema_closure_object_ids=["police_alert"],
+    )
+
+    prompt = PromptBuilder().build_controlled_xiyan_prompt(context, metadata)
+
+    assert "Approved task goal" in prompt
+    assert "Approved task objects: police_alert, alert_involvement" in prompt
+    assert "Do not replace a detail-record request with an unrelated aggregate." in prompt
+
+
 def test_sql_generator_routes_xiyan_3b_to_local_openai_endpoint():
     generator = SQLGenerator()
     recorded = {}
@@ -280,7 +326,7 @@ def test_sql_generator_routes_xiyan_3b_to_local_openai_endpoint():
     assert sql == "SELECT COUNT(*) AS 数量 FROM countries;"
     assert trace["raw_model_output"] == "SELECT COUNT(*) AS 数量 FROM countries;"
     assert recorded["url"].endswith("/chat/completions")
-    assert recorded["json"]["model"] == "XiYanSQL-QwenCoder-3B-2504"
+    assert recorded["json"]["model"] == settings.xiyan_finetune_model
     assert recorded["json"]["temperature"] == 0.0
     assert recorded["json"]["max_tokens"] == 512
 
@@ -298,10 +344,10 @@ def test_sql_generator_routes_ollama_and_finetune_xiyan_separately():
         SQLGenerator.DEFAULT_MODEL_ID
     )
 
-    assert ollama_base_url == "http://127.0.0.1:11434/v1"
-    assert ollama_model == "xiyansql-3b"
-    assert ollama_api_key == "ollama"
-    assert finetune_base_url == "http://127.0.0.1:8010/v1"
-    assert finetune_model == "XiYanSQL-QwenCoder-3B-2504"
+    assert ollama_base_url == settings.xiyan_ollama_base_url
+    assert ollama_model == settings.xiyan_ollama_model
+    assert ollama_api_key == settings.xiyan_ollama_api_key
+    assert finetune_base_url == settings.xiyan_finetune_base_url
+    assert finetune_model == settings.xiyan_finetune_model
     assert default_base_url != ollama_base_url
     assert default_model == "Qwen3-Coder-Next-FP8"

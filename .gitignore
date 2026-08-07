@@ -4,6 +4,7 @@ env.txt.copy
 .env.bak.20260724_125031
 
 
+
 # PyCharm
 .idea/
 
@@ -33,10 +34,10 @@ data/
 
 docs
 
-scripts
-
-tests
-
 training
+
+frontend
+
+reports
 
 

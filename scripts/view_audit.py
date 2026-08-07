@@ -7,7 +7,7 @@ E:\SoftWare\anaconda\envs\fastapi_project\python.exe scripts\view_audit.py
 查看指定日期：
 E:\SoftWare\anaconda\envs\fastapi_project\python.exe scripts\view_audit.py --date 2026-07-28
 限制条数：
-E:\SoftWare\anaconda\envs\fastapi_project\python.exe scripts\view_audit.py --date 2026-08-05 --limit 1
+E:\SoftWare\anaconda\envs\fastapi_project\python.exe scripts\view_audit.py --date 2026-08-07 --limit 1
 列出已有日期：
 E:\SoftWare\anaconda\envs\fastapi_project\python.exe scripts\view_audit.py --list-dates
 旧审计仍在：

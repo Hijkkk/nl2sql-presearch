@@ -5,6 +5,7 @@
 MVP 阶段在 SQL 安全解析中使用 oracle 方言。
 """
 import time
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger
@@ -63,8 +64,35 @@ class DamengAdapter(BaseDataSourceAdapter):
     def _connect_with_jdbc(self):
         try:
             import jaydebeapi
+            import jpype
         except ImportError as exc:
             raise RuntimeError("达梦 JDBC 兜底连接需要安装 JayDeBeApi 和 JPype1") from exc
+
+        # JPype cannot discover a JVM on every Windows installation.  Keep the
+        # path configurable so the backend can use an already installed JBR/JDK
+        # without exposing any database credential or connection setting.
+        if not jpype.isJVMStarted():
+            configured_jvm = Path(settings.dameng_jvm_path).expanduser() if settings.dameng_jvm_path else None
+            if configured_jvm and configured_jvm.is_file():
+                jpype.startJVM(
+                    str(configured_jvm),
+                    f"-Djava.class.path={self.jdbc_driver_path}",
+                    ignoreUnrecognized=True,
+                    convertStrings=True,
+                )
+            else:
+                try:
+                    default_jvm = jpype.getDefaultJVMPath()
+                except Exception as exc:
+                    raise RuntimeError(
+                        "达梦 JDBC 已配置，但未找到 JVM；请设置 DAMENG_JVM_PATH 指向 jvm.dll"
+                    ) from exc
+                jpype.startJVM(
+                    default_jvm,
+                    f"-Djava.class.path={self.jdbc_driver_path}",
+                    ignoreUnrecognized=True,
+                    convertStrings=True,
+                )
 
         url = f"jdbc:dm://{self.host}:{self.port}/{self.schema}?charset=UTF-8"
         return jaydebeapi.connect(

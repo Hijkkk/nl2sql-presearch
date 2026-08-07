@@ -3,6 +3,7 @@ SQL generator for OpenAI-compatible LLM endpoints.
 Supports company LiteLLM, DashScope, XiYanSQL through Ollama, and XiYanSQL finetune service.
 """
 import httpx
+import asyncio
 import json
 import re
 import time
@@ -11,6 +12,8 @@ from loguru import logger
 from backend.config.config import settings
 from backend.nl2sql.prompt_builder import PromptBuilder
 from backend.nl2sql.table_selector import select_relevant_tables
+from backend.nl2sql.schema_context import expand_schema_closure
+from backend.agent.contracts import XiYanPromptContext
 
 
 class SQLGenerator:
@@ -104,8 +107,15 @@ class SQLGenerator:
         :param model_config:
         :return:
         """
-        # 三个对象足以覆盖当前 MVP 的主链路，避免无关 schema 扩大 Prompt。
-        relevant_tables = select_relevant_tables(question, metadata, max_tables=3, data_source=data_source)
+        # 先按相关性召回三个对象，再补齐它们的外键/视图/Catalog 关系闭包。
+        # 这样既控制 Prompt 大小，也避免 JOIN 所需对象只出现在 Catalog 提示中。
+        selected_tables = select_relevant_tables(question, metadata, max_tables=3, data_source=data_source)
+        relevant_tables = expand_schema_closure(
+            metadata,
+            selected_tables,
+            data_source=data_source,
+            max_objects=5,
+        )
         trace = {
             "rag_enabled": False,
             "rag_hits": [],
@@ -251,6 +261,81 @@ class SQLGenerator:
         except Exception as e:
             logger.error(f"LLM generation error: {e}")
             return "", "", f"SQL生成异常: {str(e)}", trace
+
+    async def generate_controlled_sql(
+        self,
+        context: XiYanPromptContext,
+        metadata: Dict[str, Any],
+        *,
+        model_id: Optional[str] = None,
+        model_config: Optional[Dict[str, Any]] = None,
+    ) -> Tuple[str, str, Optional[str], Dict[str, Any]]:
+        """Generate SQL only from a server-validated XiYan prompt context."""
+        selected_model_id = model_id or self.XIYAN_FINETUNE_MODEL_ID
+        trace: Dict[str, Any] = {
+            "selected_tables": context.schema_closure_object_ids,
+            "schema_signature": context.schema_signature,
+            "prompt_template": "",
+            "raw_model_output": "",
+            "llm_thought": "",
+            "generation_cache_hit": False,
+            "controlled": True,
+        }
+        if not self._is_xiyan_model(selected_model_id):
+            return "", "", "受控执行只能使用 XiYan SQL 模型", trace
+
+        prompt = self.prompt_builder.build_controlled_xiyan_prompt(context, metadata)
+        trace["prompt_template"] = prompt
+        trace["prompt_token_estimate"] = max(1, len(prompt) // 4)
+        model_config = model_config or {}
+        try:
+            base_url, model, api_key = self._resolve_model_config(selected_model_id)
+            # Ollama does not require authentication.  Environment files often
+            # represent an empty optional key as whitespace; never emit the
+            # invalid HTTP header ``Authorization: Bearer `` in that case.
+            api_key = api_key.strip()
+            headers = {"Content-Type": "application/json"}
+            if api_key:
+                headers["Authorization"] = f"Bearer {api_key}"
+            payload = {
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": "只生成单条只读 SQL。"},
+                    {"role": "user", "content": prompt},
+                ],
+                "temperature": float(model_config.get("temperature", 0.0)),
+                "top_p": float(model_config.get("top_p", 0.8)),
+                # A controlled local request is budgeted with the prompt before
+                # dispatch; do not let caller model_config consume its safety margin.
+                "max_tokens": min(
+                    int(model_config.get("max_tokens", settings.agent_xiyan_max_output_tokens)),
+                    settings.agent_xiyan_max_output_tokens,
+                ),
+                "stream": False,
+            }
+            response = await asyncio.to_thread(
+                self.client.post,
+                f"{base_url}/chat/completions",
+                json=payload,
+                headers=headers,
+            )
+            response.raise_for_status()
+            content = response.json()["choices"][0]["message"]["content"]
+            thought, sql = self._extract_thought_and_sql(content)
+            trace["raw_model_output"] = content
+            trace["llm_thought"] = thought or self._build_generation_note(context.schema_closure_object_ids)
+            if not sql:
+                return "", thought or content, "未能从 XiYan 响应中提取有效 SQL", trace
+            clean_sql = self._apply_source_sql_patches(sql, context.question, context.source_id)
+            return self._clean_sql(clean_sql), trace["llm_thought"], None, trace
+        except httpx.HTTPStatusError as exc:
+            # Do not return the provider body, which can be verbose.  The status
+            # is enough for the UI/audit to distinguish an invalid request from
+            # a local service outage.
+            return "", "", f"XiYan HTTP_{exc.response.status_code}", trace
+        except Exception as exc:
+            logger.error(f"Controlled XiYan generation error: {exc}")
+            return "", "", f"XiYan 受控生成异常: {type(exc).__name__}", trace
 
     def _extract_thought_and_sql(self, content: str) -> Tuple[str, str]:
         """Extract LLM rationale and SQL from a completion."""
@@ -823,6 +908,15 @@ ORDER BY total_sales DESC, city;
         patched = re.sub(r"\b(\w+)\.role_type\b", r"\1.role_code", patched, flags=re.IGNORECASE)
         patched = re.sub(r"\bperson_name\b", "name", patched, flags=re.IGNORECASE)
         patched = re.sub(r"\brole_type\b", "role_code", patched, flags=re.IGNORECASE)
+        # alert_involvement.role_code is the business code, not the numeric
+        # dictionary primary key.  Correct this known model mix-up before the
+        # statement reaches the adapter.
+        patched = re.sub(
+            r"\b(\w+)\.role_id\s*=\s*(\w+)\.role_code\b",
+            r"\1.role_code = \2.role_code",
+            patched,
+            flags=re.IGNORECASE,
+        )
         role_map = {
             "嫌疑": "SUSPECT",
             "嫌疑人": "SUSPECT",
@@ -948,11 +1042,17 @@ ORDER BY total_sales DESC, city;
                                model_config: Optional[Dict[str, Any]] = None,
                                data_source: str = "") -> Tuple[str, str]:
         """Ask the selected LLM to repair a failed read-only SQL statement."""
-        relevant_tables = select_relevant_tables(
+        selected_tables = select_relevant_tables(
             question,
             metadata,
             max_tables=3,
             data_source=data_source,
+        )
+        relevant_tables = expand_schema_closure(
+            metadata,
+            selected_tables,
+            data_source=data_source,
+            max_objects=5,
         )
         schema_text = self.prompt_builder._format_metadata(metadata, relevant_tables)
         correction_prompt = f"""之前的SQL执行失败了，请根据错误信息修复。

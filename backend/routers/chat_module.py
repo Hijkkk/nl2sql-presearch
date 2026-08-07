@@ -20,6 +20,7 @@ from backend.nl2sql.metadata_summarizer import MetadataSummarizer
 from backend.api_services.amap_lbs_service import AmapLBSService
 from backend.api_services.gauss_city_fusion_service import GaussCityFusionService
 from backend.security.query_guard import QueryGuard
+from backend.agent.graph import ControlledAgentGraph
 
 router = APIRouter(prefix="/api/v1", tags=["chat_module"])
 
@@ -27,6 +28,7 @@ sql_generator = SQLGenerator()
 metadata_summarizer = MetadataSummarizer()
 amap_lbs_service = AmapLBSService()
 gauss_city_fusion_service = GaussCityFusionService(amap_lbs_service)
+controlled_agent_graph = ControlledAgentGraph()
 
 
 def response_for_client(response: ChatResponse) -> ChatResponse:
@@ -273,6 +275,75 @@ async def warmup_metadata_summaries(
     except Exception as e:
         logger.error(f"Metadata summary warmup error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/agent/preview")
+async def preview_controlled_agent(
+    request: ChatRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """Run the record-only controlled graph without generating or executing SQL."""
+    if not settings.agent_enabled:
+        raise HTTPException(status_code=404, detail="受控 Agent 预检未启用")
+    if not settings.agent_record_only:
+        raise HTTPException(status_code=409, detail="当前仅支持 Agent 预检模式")
+
+    state = await controlled_agent_graph.run(request.question)
+    plan = state.get("plan")
+    validation = state.get("validation")
+    review = state.get("reviewer_decision")
+    return {
+        "request_id": state["request_id"],
+        "status": state.get("status"),
+        "record_only": True,
+        "sql_executed": False,
+        "source_candidates": [
+            {"source_id": candidate.source_id, "score": candidate.score, "matched_terms": candidate.matched_terms}
+            for candidate in state.get("candidates", [])
+        ],
+        "schema_contexts": [
+            {
+                "source_id": context.source.source_id,
+                "schema_signature": context.schema_signature,
+                "selected_object_ids": context.selected_object_ids,
+                "schema_closure_object_ids": context.schema_closure_object_ids,
+            }
+            for context in state.get("contexts", [])
+        ],
+        "plan": plan.model_dump() if plan else None,
+        "validation": validation.model_dump() if validation else None,
+        "review": review.model_dump() if review else None,
+        "events": state.get("events", []),
+        "error": state.get("error"),
+    }
+
+
+@router.post("/agent/run")
+async def run_controlled_agent(
+    request: ChatRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """Run the guarded single-source Agent path after record-only evaluation is disabled."""
+    if not settings.agent_enabled:
+        raise HTTPException(status_code=404, detail="受控 Agent 未启用")
+    if settings.agent_record_only:
+        raise HTTPException(status_code=409, detail="当前为仅记录模式；请先完成预检评估")
+
+    state = await controlled_agent_graph.run(request.question)
+    execution = state.get("execution")
+    return {
+        "request_id": state["request_id"],
+        "status": state.get("status"),
+        "record_only": False,
+        "sql_executed": execution is not None,
+        "execution": execution.model_dump() if execution else None,
+        "answer": state.get("answer"),
+        "plan": state["plan"].model_dump() if state.get("plan") else None,
+        "validation": state["validation"].model_dump() if state.get("validation") else None,
+        "review": state["reviewer_decision"].model_dump() if state.get("reviewer_decision") else None,
+        "events": state.get("events", []),
+        "error": state.get("error"),
+    }
 
 
 @router.post("/chat", response_model=ChatResponse)

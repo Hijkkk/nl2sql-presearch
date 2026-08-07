@@ -5,6 +5,7 @@ User authentication and user preference APIs.
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,6 +22,7 @@ from backend.models.user import (
 router = APIRouter(prefix="/api/user", tags=["user"])
 # 保留当前用户的默认模型配置。
 v1_router = APIRouter(prefix="/api/v1/user", tags=["user"])
+bearer_scheme = HTTPBearer(auto_error=False)
 
 
 # 规范化授权令牌。
@@ -51,11 +53,15 @@ def _normalize_token(authorization: Optional[str]) -> str:
 async def get_current_user(
     # 来自 FastAPI 的 from fastapi import Header，用于获取请求头参数
     authorization: Optional[str] = Header(default=None, alias="Authorization"),
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
     # 依赖项，用于获取数据库会话
     db: AsyncSession = Depends(get_db),
 ) -> User:
     # 获取并规范化授权令牌。
-    token = _normalize_token(authorization)
+    # Keep compatibility with the existing frontend's raw Authorization token,
+    # while exposing a standard Bearer security scheme in Swagger UI.
+    bearer_value = f"Bearer {credentials.credentials}" if credentials else None
+    token = _normalize_token(authorization or bearer_value)
     if not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

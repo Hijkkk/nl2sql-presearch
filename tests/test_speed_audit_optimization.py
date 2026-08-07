@@ -159,6 +159,12 @@ def test_demo_patches_cover_police_stock_hadoop_and_translated_summary():
     assert "alert_type_code = 'SECURITY'" in police_sql
     assert "alert_status_code = 'CLOSED'" in police_sql
 
+    involvement_sql = generator._apply_source_sql_patches(
+        "SELECT r.role_name FROM alert_involvement i JOIN dict_alert_role r ON r.role_id = i.role_code",
+        "", "mysql_police_address",
+    )
+    assert "r.role_code = i.role_code" in involvement_sql
+
     stock_sql = generator._apply_source_sql_patches(
         "SELECT 1", "找出最新收盘价高于自身 2026 年 7 月平均收盘价的科技股。", "postgres_stock"
     )

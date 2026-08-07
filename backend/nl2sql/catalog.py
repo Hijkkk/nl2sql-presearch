@@ -22,13 +22,27 @@ _CACHE_DATA: Dict[str, Any] = {}
 def get_source_catalog(data_source: str) -> Dict[str, Any]:
     if not data_source:
         return {}
+    # sources:
+    #   mysql_sales:
+    #     # mysql_sales 的配置
+    #   police_address:
+    #     # police_address 的配置
+    #   rest_api_demo:
+    #     # rest_api_demo 的配置
     sources = load_catalog().get("sources", {})
+    # 尝试从 sources 中找到 data_source 对应的配置
+    # 如果没找到，返回空字典
     catalog = sources.get(data_source, {}) or {}
     if catalog:
         return catalog
+
+    # 暂时只支持 mysql_sales 和 police_address
     aliases = {
         "mysql_police_address": "police_address",
     }
+    # aliases.get(data_source, "") - 查找别名映射
+    # sources.get(..., {}) - 用映射后的名字查找配置
+    # or {} - 如果都没找到，返回空字典
     return sources.get(aliases.get(data_source, ""), {}) or {}
 
 
@@ -73,23 +87,37 @@ def catalog_prompt_hint(data_source: str, available_names: Iterable[str]) -> str
 
 
 def load_catalog() -> Dict[str, Any]:
+    # 使用了 global 变量实现缓存
+    # _CACHE_PATH = ""      # 缓存的文件路径
+    # _CACHE_MTIME = 0.0    # 缓存的文件修改时间
+    # _CACHE_DATA = {}      # 缓存的实际数据
     global _CACHE_PATH, _CACHE_MTIME, _CACHE_DATA
 
+    # 优先使用环境变量指定的路径，如果没有则使用代码中定义的默认路径。
     path = Path(os.getenv("NL2SQL_CATALOG_PATH") or DEFAULT_CATALOG_PATH)
     try:
-        stat = path.stat()
+        stat = path.stat() # 获取文件状态
     except OSError:
-        return {"sources": {}}
+        return {"sources": {}} # 文件不存在，返回空配置
 
     cache_path = str(path)
+    # _CACHE_DATA 有数据（不为空）
+    # _CACHE_PATH == cache_path（路径没变）
+    # _CACHE_MTIME == stat.st_mtime（文件修改时间没变）
+    # 如果都满足，直接返回缓存，跳过后续的文件读取和解析。
     if _CACHE_DATA and _CACHE_PATH == cache_path and _CACHE_MTIME == stat.st_mtime:
         return _CACHE_DATA
 
+    # 先尝试 UTF-8 编码
+    # 如果失败（可能是带 BOM 的 UTF-8），用 utf-8-sig
     try:
         text = path.read_text(encoding="utf-8")
     except UnicodeDecodeError:
         text = path.read_text(encoding="utf-8-sig")
 
+    # 调用 _load_yaml(text) 解析 YAML
+    # 如果解析结果不是字典，转成空配置
+    # setdefault("sources", {}) 确保有 sources 字段（没有则设为空字典）
     data = _load_yaml(text)
     if not isinstance(data, dict):
         data = {"sources": {}}

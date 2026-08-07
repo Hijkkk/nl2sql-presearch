@@ -2,9 +2,14 @@
 Prompt 构建器 - 让小模型 / 公司内部模型也能较好完成复杂 NL2SQL 的关键
 包含：系统指令 + 数据源专属 Few-shot + Schema 格式化
 """
-from typing import Dict, List, Any
+from typing import Dict, List, Any, TYPE_CHECKING
+
+from backend.config.config import settings
 from loguru import logger
 from backend.nl2sql.catalog import catalog_prompt_hint
+
+if TYPE_CHECKING:
+    from backend.agent.contracts import XiYanPromptContext
 
 
 class PromptBuilder:
@@ -359,7 +364,8 @@ WHERE alert_content LIKE '%张三%';
     #     格式效果好得多。
     # 支持通过 relevant_tables 参数精简只保留相关表，减少 token 消耗
     def build_xiyan_prompt(self, question: str, metadata: Dict[str, Any], dialect: str = "SQLite",
-                           relevant_tables: List[str] = None, data_source: str = "") -> str:
+                           relevant_tables: List[str] = None, data_source: str = "",
+                           controlled_context: "XiYanPromptContext | None" = None) -> str:
         """Build the concise XiYanSQL prompt recommended by the model card."""
         schema_text = self._format_metadata(metadata, relevant_tables)
         catalog_hint = catalog_prompt_hint(
@@ -432,7 +438,20 @@ WHERE alert_content LIKE '%张三%';
                 "V_ORDER_SUMMARY 的城市字段是 CUSTOMER_CITY；CUSTOMERS C 基表的字段是 CITY。使用视图时写 CUSTOMER_CITY，使用基表时必须写 C.CITY，绝不能写 C.CUSTOMER_CITY。"
             )
         evidence_text = "\n".join(evidence_items)
+        controlled_header = ""
+        if controlled_context:
+            allowed_objects = ", ".join(controlled_context.schema_closure_object_ids)
+            allowed_fields = ", ".join(controlled_context.allowed_field_ids) or "当前 schema 中列出的字段"
+            controlled_header = f"""\n【受控执行上下文】
+当前数据源 ID：{controlled_context.source_id}
+当前方言：{controlled_context.dialect}
+Schema 版本：{controlled_context.schema_signature or '未提供'}
+允许对象：{allowed_objects}
+允许字段：{allowed_fields}
+执行限制：仅一条 SELECT/WITH，最多返回 {controlled_context.max_rows} 行；不得跨数据源、调用 API 或使用未列出的对象/字段。
+"""
         return f"""你是一名{dialect}专家，现在需要阅读并理解下面的【数据库schema】描述，以及可能用到的【参考信息】，并运用{dialect}知识生成sql语句回答【用户问题】。
+{controlled_header}
 【用户问题】
 {question}
 
@@ -446,6 +465,110 @@ WHERE alert_content LIKE '%张三%';
 {question}
 
 ```sql"""
+
+    def build_controlled_xiyan_prompt(
+        self,
+        context: "XiYanPromptContext",
+        metadata: Dict[str, Any],
+    ) -> str:
+        """Render a compact, server-validated XiYan prompt.
+
+        The regular template includes full comments and several few-shot
+        examples.  That is useful for a large-context model, but a local Ollama
+        Q4 model can expose a 4K context window.  Agent execution therefore
+        keeps the same source-specific business rules while removing duplicated
+        allowed-field lists, verbose comments and unrelated examples.
+        """
+        self._validate_controlled_budget()
+        compact_schema = self._format_compact_metadata(metadata, context.schema_closure_object_ids)
+        rules = [
+            "Only output one SELECT or WITH SQL statement, with no explanation or Markdown.",
+            "Use only tables and fields shown in Schema. Never invent fields or access another source.",
+            f"Use {context.dialect} syntax and add a LIMIT no greater than {context.max_rows} when the query can return detail rows.",
+        ]
+        if context.task_goal:
+            rules.append(f"Approved task goal (must be implemented without narrowing it): {context.task_goal}")
+        if context.required_object_ids:
+            rules.append(f"Approved task objects: {', '.join(context.required_object_ids)}. Use every object required to implement the goal's filters and joins.")
+        if context.planned_output_fields:
+            rules.append(f"Planned output fields: {', '.join(context.planned_output_fields)}. Do not replace a detail-record request with an unrelated aggregate.")
+        rules.append("For every Chinese YYYY年M月 constraint, use an explicit half-open range from YYYY-MM-01 00:00:00 (inclusive) to the following month YYYY-MM-01 00:00:00 (exclusive).")
+        if context.source_id in {"mysql_police_address", "police_address"}:
+            rules.extend([
+                "For a Chinese calendar month such as 2026 year 1 month, use alert_time >= '2026-01-01 00:00:00' AND alert_time < '2026-02-01 00:00:00'. Never use the next day as the upper bound.",
+                "Do not add alert type or status filters unless the approved task goal explicitly asks for them.",
+                "When querying a named involved person, JOIN alert_involvement i ON i.alert_no = a.alert_no and filter i.name. For a suspect, filter i.role_code = 'SUSPECT'.",
+                "For the police_alert base table the status field is alert_status. alert_status_code belongs to the alert-detail view only. If joining dict_alert_role, use r.role_code = i.role_code, never r.role_id = i.role_code.",
+                "警务报警统计优先使用 v_nl2sql_alert_detail；月份必须使用 alert_time 的半开区间。",
+                "治安报警使用 alert_type_code = 'SECURITY'；已结案使用 alert_status_code = 'CLOSED'；区域使用 district_name。",
+                "统计警情数量必须使用 COUNT(DISTINCT alert_no)，不要查询人员或地址表。",
+                "示例：2026年1月东城区已结案治安报警，查询 v_nl2sql_alert_detail，条件为 district_name = '东城区'、alert_type_code = 'SECURITY'、alert_status_code = 'CLOSED'、alert_time >= '2026-01-01 00:00:00' AND alert_time < '2026-02-01 00:00:00'。",
+                "当前居住人员才使用 v_nl2sql_person_current_address；小区名称用 full_address LIKE。",
+            ])
+        prompt = "\n".join([
+            "You are a controlled Text-to-SQL generator.",
+            f"Source: {context.source_id}; dialect: {context.dialect}",
+            f"Question: {context.question}",
+            "Schema:",
+            compact_schema,
+            "Rules:",
+            *[f"- {rule}" for rule in rules],
+            "SQL:\n```sql",
+        ])
+        if self._estimate_xiyan_tokens(prompt) <= settings.agent_xiyan_prompt_token_budget:
+            return prompt
+
+        # Preserve the question, dialect and source-specific rules first.  Only
+        # the least useful schema detail (excess columns) is compacted further.
+        compact_schema = self._format_compact_metadata(
+            metadata,
+            context.schema_closure_object_ids,
+            max_fields_per_object=24,
+        )
+        prompt = prompt.replace(self._format_compact_metadata(metadata, context.schema_closure_object_ids), compact_schema)
+        if self._estimate_xiyan_tokens(prompt) > settings.agent_xiyan_prompt_token_budget:
+            raise ValueError("CONTROLLED_XIYAN_PROMPT_BUDGET_EXCEEDED")
+        return prompt
+
+    @staticmethod
+    def _estimate_xiyan_tokens(text: str) -> int:
+        """Conservative local estimate calibrated against Ollama's Qwen tokens."""
+        # CJK characters and ASCII identifiers are tokenized differently.  The
+        # 2.5-character estimate intentionally leaves room below the 4K limit.
+        return max(1, (len(text) + 2) // 3)
+
+    @staticmethod
+    def _validate_controlled_budget() -> None:
+        total = (
+            settings.agent_xiyan_prompt_token_budget
+            + settings.agent_xiyan_max_output_tokens
+            + settings.agent_xiyan_safety_margin_tokens
+        )
+        if total > settings.agent_xiyan_context_window:
+            raise ValueError("CONTROLLED_XIYAN_CONTEXT_BUDGET_INVALID")
+
+    @staticmethod
+    def _format_compact_metadata(
+        metadata: Dict[str, Any],
+        relevant_tables: List[str],
+        max_fields_per_object: int | None = None,
+    ) -> str:
+        """Emit field names/types only, avoiding long comments that exhaust local context."""
+        relevant = set(relevant_tables)
+        lines: list[str] = []
+        for table in metadata.get("tables", []):
+            name = str(table.get("name") or "")
+            if not name or name not in relevant:
+                continue
+            fields = [
+                f"{column.get('name', '')} {column.get('type', '')}".strip()
+                for column in table.get("columns", [])
+                if column.get("name")
+            ]
+            if max_fields_per_object and len(fields) > max_fields_per_object:
+                fields = fields[:max_fields_per_object] + ["…"]
+            lines.append(f"{name}({', '.join(fields)})")
+        return "\n".join(lines) or "(no approved schema objects)"
 
     def _format_metadata(self, metadata: Dict[str, Any],
                          relevant_tables: List[str] = None) -> str:

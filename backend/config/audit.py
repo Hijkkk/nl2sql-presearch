@@ -38,6 +38,11 @@ def audit_db_path(audit_date: str | date | None = None) -> Path:
     return audit_root_dir() / day / f"audit_{day}.db"
 
 
+def agent_trace_root_dir() -> Path:
+    """Human-readable, per-run Agent traces kept separately from SQLite audit rows."""
+    return project_root() / "data" / "agent_traces"
+
+
 def init_audit_db(audit_date: str | date | None = None):
     """初始化审计表"""
     path = audit_db_path(audit_date)
@@ -74,6 +79,30 @@ def init_audit_db(audit_date: str | date | None = None):
             result_columns_json TEXT DEFAULT '[]',
             result_sample_json TEXT DEFAULT '[]',
             result_truncated INTEGER DEFAULT 0
+        )
+    """)
+    # Agent records are additive: audit_logs remains the historical fact table
+    # for the original chat path, while these tables preserve graph structure.
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS agent_runs (
+            request_id TEXT PRIMARY KEY,
+            timestamp TEXT NOT NULL,
+            question TEXT NOT NULL,
+            status TEXT NOT NULL,
+            route_mode TEXT,
+            final_plan_json TEXT DEFAULT '{}',
+            error_message TEXT
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS agent_steps (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            request_id TEXT NOT NULL,
+            step_index INTEGER NOT NULL,
+            node_name TEXT NOT NULL,
+            status TEXT NOT NULL,
+            payload_json TEXT DEFAULT '{}',
+            FOREIGN KEY(request_id) REFERENCES agent_runs(request_id)
         )
     """)
     existing_columns = {row[1] for row in cursor.execute("PRAGMA table_info(audit_logs)")}
@@ -188,3 +217,130 @@ def log_audit(
         conn.close()
     except Exception as e:
         logger.error(f"Failed to write audit log: {e}")
+
+
+def log_agent_trace(
+    *,
+    request_id: str,
+    question: str,
+    status: str,
+    events: list[dict[str, Any]],
+    route_mode: Optional[str] = None,
+    final_plan: Optional[dict[str, Any]] = None,
+    error_message: Optional[str] = None,
+) -> None:
+    """Append a controlled-agent trace without modifying historical audit rows."""
+    try:
+        init_audit_db()
+        conn = sqlite3.connect(audit_db_path())
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO agent_runs (request_id, timestamp, question, status, route_mode, final_plan_json, error_message)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                request_id,
+                datetime.now().isoformat(),
+                question,
+                status,
+                route_mode,
+                json.dumps(final_plan or {}, ensure_ascii=False),
+                error_message,
+            ),
+        )
+        cursor.executemany(
+            """
+            INSERT INTO agent_steps (request_id, step_index, node_name, status, payload_json)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    request_id,
+                    index,
+                    str(event.get("node", "unknown")),
+                    str(event.get("status", "unknown")),
+                    json.dumps(event, ensure_ascii=False, default=str),
+                )
+                for index, event in enumerate(events, start=1)
+            ],
+        )
+        conn.commit()
+        conn.close()
+    except Exception as exc:
+        logger.error(f"Failed to write controlled-agent audit trace: {exc}")
+
+
+def write_agent_execution_trace(
+    *,
+    request_id: str,
+    question: str,
+    status: str,
+    candidates: list[dict[str, Any]],
+    contexts: list[dict[str, Any]],
+    plan: Optional[dict[str, Any]],
+    validation: Optional[dict[str, Any]],
+    review: Optional[dict[str, Any]],
+    execution: Optional[dict[str, Any]],
+    answer: Optional[str],
+    events: list[dict[str, Any]],
+    error: Optional[str],
+) -> None:
+    """Write a safe, inspectable JSON trace for one controlled-agent request.
+
+    The trace records routing, approved schema scope, reviewer decisions, SQL and
+    execution metadata.  It intentionally excludes credentials and raw result
+    rows; the latter may contain business-sensitive data and remain in the
+    governed source/audit sampling path.
+    """
+    try:
+        created_at = datetime.now()
+        directory = agent_trace_root_dir() / created_at.date().isoformat()
+        directory.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "trace_version": 2,
+            "created_at": created_at.isoformat(),
+            "request_id": request_id,
+            "question": question,
+            "status": status,
+            "retrieval": {
+                "pipeline": {
+                    "lexical_recall": "关键词与中文二元词召回，作为确定性回退和混合重排基础。",
+                    "embedding": {
+                        "enabled": bool(settings.agent_vector_enabled),
+                        "model": settings.agent_embedding_model,
+                        "dimensions": settings.agent_embedding_dimensions,
+                        "raw_query_vector_stored": False,
+                    },
+                    "vector_search": {
+                        "collection": settings.agent_qdrant_collection,
+                        "distance": "cosine",
+                        "payload_only": True,
+                    },
+                    "hybrid_ranking": {
+                        "formula_when_semantic_hit": "semantic_score * 10 + lexical_score",
+                        "deterministic_seed_count": 2,
+                        "schema_closure": "按关系补齐 JOIN 依赖，随后仅把受限对象交给规划与 SQL 生成。",
+                    },
+                },
+                "candidates": candidates,
+                "schema_contexts": contexts,
+            },
+            "plan": plan,
+            "validation": validation,
+            "review": review,
+            "execution": execution,
+            "answer": answer,
+            "events": events,
+            "error": error,
+            "privacy": {"raw_result_rows_included": False, "credentials_included": False},
+        }
+        # Timestamp-first names are easy to inspect chronologically. Microseconds
+        # keep one trace file per concurrent request; request_id stays in JSON.
+        filename = created_at.strftime("%Y-%m-%d_%H-%M-%S-%f") + ".json"
+        path = directory / filename
+        temporary = path.with_suffix(".json.tmp")
+        temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+        temporary.replace(path)
+    except Exception as exc:
+        logger.error(f"Failed to write controlled-agent execution trace: {exc}")
