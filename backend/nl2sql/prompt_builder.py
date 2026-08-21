@@ -1,6 +1,21 @@
 """
 Prompt 构建器 - 让小模型 / 公司内部模型也能较好完成复杂 NL2SQL 的关键
 包含：系统指令 + 数据源专属 Few-shot + Schema 格式化
+
+本文件在工程里的位置（看 backend/agent/graph.py 工作流）：
+
+  Chat 路径（HTTP API 直接问一句）        : build_xiyan_prompt()          ← 长版含 few-shot
+  受控 Agent 路径 (LangGraph 六节点)      : build_controlled_xiyan_prompt() ← 精简版给本地 3B
+  共享业务规则（chat/agent 都要用）       : get_agent_source_template()     ← 同一个 source_id 一份
+                                          ↑ 三处都从这里读 sql_rules，保证两条路径语义一致
+
+调用方：
+  - backend/nl2sql/sql_generator.py:284 generate_controlled_sql()  调 build_controlled_xiyan_prompt()
+  - backend/nl2sql/sql_generator.py:204 generate()                 调 build_xiyan_prompt()
+  - backend/agent/llm.py:443  QwenPlanner                           调 get_agent_source_template()
+  - backend/agent/llm.py:358  QwenPlanReviewer                       调 get_agent_source_template()
+
+为什么必须分"长版/精简版"两套？见 build_controlled_xiyan_prompt() 的 docstring。
 """
 from typing import Dict, List, Any, TYPE_CHECKING
 
@@ -13,21 +28,36 @@ if TYPE_CHECKING:
 
 
 class PromptBuilder:
+    """项目里唯一的 prompt 工厂。所有 prompt 模板、few-shot、业务规则都集中在这里维护。
+
+    设计原则：
+      1) 系统提示（"你是 SQL 专家…"）只写一次，所有路径共享
+      2) Few-shot 按数据源分桶，调用时按 source_id 查表
+      3) 业务规则（半开日期、最新价视图、地址别名 LIKE…）走 get_agent_source_template()，
+         chat 路径和受控 agent 路径都从同一个字典里取，避免"两处维护、语义漂移"
+    """
+
     def __init__(self):
+        # 把"系统指令"和"每个数据源的 few-shot"在构造时就拼好缓存起来
+        # 后续每次请求只需要做轻量拼接，不必重复拼长字符串
         self.system_prompt = self._build_system_prompt()
+
+        # 数据源 → 各自专属的 few-shot 示例文本
+        # 加新数据源时：写一个 _build_xxx_few_shot_examples()，再在这里登记即可
         self.few_shot_by_source = {
-            "sqlite_demo": self._build_few_shot_examples(),
-            "postgres_stock": self._build_stock_few_shot_examples(),
-            "hive_hadoop_demo": self._build_hadoop_few_shot_examples(),
-            "police_address": self._build_police_address_few_shot_examples(),
-            "mysql_police_address": self._build_police_address_few_shot_examples(),
-            "gauss_ecommerce": self._build_ecommerce_few_shot_examples("orders", "customers"),
-            "dameng_ecommerce": self._build_ecommerce_few_shot_examples("ORDERS", "CUSTOMERS"),
-            "countries_graphql": self._build_graphql_few_shot_examples(),
-            "rest_api_demo": self._build_rest_few_shot_examples(),
+            "sqlite_demo":          self._build_few_shot_examples(),                  # 通用业务示例
+            "postgres_stock":       self._build_stock_few_shot_examples(),            # 股票/证券
+            "hive_hadoop_demo":     self._build_hadoop_few_shot_examples(),           # Hadoop 星型模型
+            "police_address":       self._build_police_address_few_shot_examples(),   # 警务地址
+            "mysql_police_address": self._build_police_address_few_shot_examples(),   # 同上，MySQL 版
+            "gauss_ecommerce":      self._build_ecommerce_few_shot_examples("orders", "customers"),  # 电商（gauss）
+            "dameng_ecommerce":     self._build_ecommerce_few_shot_examples("ORDERS", "CUSTOMERS"),  # 电商（达梦，大写）
+            "countries_graphql":    self._build_graphql_few_shot_examples(),          # GraphQL 虚拟表
+            "rest_api_demo":        self._build_rest_few_shot_examples(),             # REST 虚拟表
         }
 
     def _few_shots_for(self, data_source: str) -> str:
+        """按 source_id 找对应的 few-shot；找不到就用通用版本兜底。"""
         # 默认是通用提示词
         return self.few_shot_by_source.get(data_source, self._build_few_shot_examples())
 
@@ -66,6 +96,14 @@ LIMIT 10;
 ```"""
 
     def _build_system_prompt(self) -> str:
+        """生成通用的"系统提示词"——所有数据源、所有路径共用这一份。
+
+        重点约束：
+          - 只允许 SELECT/WITH（只读），绝对禁止写操作
+          - 字段必须来自元数据，禁止臆造（防"幻觉"列）
+          - 中文问题 → 中文别名（业务字段输出中文）
+          - 只输出一条 SQL，不输出解释
+        """
         return """你是一位资深的数据分析师和SQL专家。
 你的任务是根据用户的自然语言问题，结合提供的数据库元数据，生成**只读**的、高质量的SQL查询语句。
 
@@ -162,6 +200,7 @@ ORDER BY id;
 现在，请严格按照以上风格和规则，只输出 SQL。
 """
 
+    # 旧版模板草稿（已废弃，保留仅为参考）：
     # 构建提示词模板--->
     # prompt = f"""{self.system_prompt}   系统提示词模板
     # {self.few_shot_examples}            例子
@@ -171,6 +210,13 @@ ORDER BY id;
     # {question}                          问题
     # 请一步步思考后生成SQL："""
     def _build_stock_few_shot_examples(self) -> str:
+        """股票/证券场景的 few-shot：覆盖"中文名+行情 JOIN 证券主数据"、"杠杆 ETP"、"递归 CTE 行业树"。
+
+        选取理由：
+          - 中文名查询：股票领域最常见入口（用户说"苹果公司"而非"AAPL"）
+          - ETP 元数据：演示 LEFT JOIN 多个元数据表
+          - 递归 CTE：演示 WITH RECURSIVE，对应 SIC 行业树这种典型层级场景
+        """
         return """
 
 ## 示例5：股票中文名 + 行情表 JOIN 证券主数据
@@ -244,6 +290,12 @@ ORDER BY level;
 
 
     def _build_hadoop_few_shot_examples(self) -> str:
+        """Hadoop/HDFS 星型模型场景的 few-shot：覆盖"城市 GMV TopN"和"品牌月度趋势"。
+
+        关键提醒（同时会在 get_agent_source_template() 的 sql_rules 里再写一次）：
+          - 日期是 TEXT 类型 YYYY-MM-DD，按月用 substr(event_date, 1, 7)
+          - 不能用 TO_DATE / DATE_FORMAT / date_trunc（Hive 函数）
+        """
         return """
 
 ## 示例8：Hadoop/HDFS 星型模型 + 城市 GMV
@@ -276,6 +328,11 @@ ORDER BY p.brand, 月份;
 """
 
     def _build_police_address_few_shot_examples(self) -> str:
+        """警务地址库场景的 few-shot：覆盖"地址别名消歧"、"人员当前住址"、"警情内容检索"。
+
+        注意：mysql_police_address 和 police_address 都共用这一份 few-shot，
+              但 get_agent_source_template() 里两者拿到的 sql_rules 略有差异。
+        """
         return """
 
 ## 示例10：警务地址库中同名词的消歧
@@ -323,7 +380,9 @@ WHERE alert_content LIKE '%张三%';
     def build_prompt(self, question: str, metadata: Dict[str, Any],
                      relevant_tables: List[str] = None, data_source: str = "") -> str:
         """
-        构建完整 Prompt
+        【老接口】早期通用 prompt 模板，已被 build_xiyan_prompt() 替代。
+        保留原因：部分老测试和老接口还在调，迁移完所有调用方后再删。
+
         relevant_tables: 如果已做表选择，只传入相关表元数据（推荐！减少token）
         """
         schema_text = self._format_metadata(metadata, relevant_tables)
@@ -366,7 +425,27 @@ WHERE alert_content LIKE '%张三%';
     def build_xiyan_prompt(self, question: str, metadata: Dict[str, Any], dialect: str = "SQLite",
                            relevant_tables: List[str] = None, data_source: str = "",
                            controlled_context: "XiYanPromptContext | None" = None) -> str:
-        """Build the concise XiYanSQL prompt recommended by the model card."""
+        """Chat 路径的主 prompt 构造器。被 sql_generator.generate() 调用。
+
+        输入：
+          - question      : 用户原始问题
+          - metadata      : retrieve 阶段拿到的完整元数据（含 tables / schema_signature）
+          - dialect       : SQL 方言（默认 SQLite，postgres / mysql / hive 各有差异）
+          - relevant_tables: 可选白名单，只把相关表塞进 schema_text（省 token）
+          - data_source   : 数据源 ID，用于查 few-shot 和源专属业务规则
+          - controlled_context: 可选；如果是 Agent 受控调用，把"受控边界"写到 prompt 头部
+
+        输出格式（中文 prompt 模板）：
+          1) "你是 XXX 专家…" 角色设定
+          2) 【受控执行上下文】（仅 controlled_context 非空时）
+          3) 【用户问题】
+          4) 【数据库 schema】        ← _format_metadata() 拼成 CREATE TABLE 风格
+          5) 【参考信息】            ← 通用规则 + data_source 专属 sql_rules
+          6) ```sql                  ← 引导模型在代码块里写 SQL
+
+        与 build_controlled_xiyan_prompt() 的差别：本函数保留中文角色设定和详细 few-shot，
+        适合云端大模型（DashScope Qwen）调用；那个是英文精简版，给本地 3B 用。
+        """
         schema_text = self._format_metadata(metadata, relevant_tables)
         catalog_hint = catalog_prompt_hint(
             data_source,
@@ -377,6 +456,8 @@ WHERE alert_content LIKE '%张三%';
         ]
         if catalog_hint:
             evidence_items.append(catalog_hint)
+        # ↓↓↓ 以下是"数据源专属业务规则"——每加一个新数据源，新增一个 elif 分支
+        # 这些规则在 chat 路径是辅助说明，但在受控 agent 路径是被当作硬约束
         if data_source == "hive_hadoop_demo":
             evidence_items.append(
                 "当前 Hadoop/HDFS 演示源由本地 SQLite 执行 CSV 表；日期是 TEXT 类型 YYYY-MM-DD。按月统计必须使用 substr(event_date, 1, 7)，不要使用 TO_DATE、DATE_FORMAT、date_trunc 等 Hive/MySQL/PostgreSQL 函数。"
@@ -437,6 +518,10 @@ WHERE alert_content LIKE '%张三%';
             evidence_items.append(
                 "V_ORDER_SUMMARY 的城市字段是 CUSTOMER_CITY；CUSTOMERS C 基表的字段是 CITY。使用视图时写 CUSTOMER_CITY，使用基表时必须写 C.CITY，绝不能写 C.CUSTOMER_CITY。"
             )
+        # The source profile is also supplied to Agent planning and controlled
+        # XiYan generation.  Keep the detailed Chat-only few-shots above, while
+        # sharing the compact semantic rules across both execution paths.
+        evidence_items.extend(self.get_agent_source_template(data_source)["sql_rules"])
         evidence_text = "\n".join(evidence_items)
         controlled_header = ""
         if controlled_context:
@@ -471,74 +556,295 @@ Schema 版本：{controlled_context.schema_signature or '未提供'}
         context: "XiYanPromptContext",
         metadata: Dict[str, Any],
     ) -> str:
-        """Render a compact, server-validated XiYan prompt.
+        """受控 Agent 路径的精简 prompt 构造器。被 sql_generator.generate_controlled_sql() 调用。
 
-        The regular template includes full comments and several few-shot
-        examples.  That is useful for a large-context model, but a local Ollama
-        Q4 model can expose a 4K context window.  Agent execution therefore
-        keeps the same source-specific business rules while removing duplicated
-        allowed-field lists, verbose comments and unrelated examples.
+        为什么必须精简？
+          chat 路径用云端大模型（Qwen3-Max），上下文充裕，可以塞完整 few-shot 和中文角色设定；
+          受控 agent 路径跑的是本地 XiYan-3B Q4 量化（Ollama 部署），上下文只有 ~4K。
+          如果照搬长版 prompt，模型根本看不到 schema 末尾，业务规则也会被截断。
+
+        精简策略：
+          1) System prompt 写死成一句"只生成单条只读 SQL"（在 sql_generator.py 里）
+          2) Schema 段用 _format_compact_metadata()，只输出 "表名(字段 类型, ...)"，不写注释
+          3) Rules 段用英文短句，凑成 markdown 列表
+          4) 不放 few-shot（业务规则 + 任务上下文已经够强引导了）
+
+        三道安全闸门（执行流程）：
+          1) _validate_controlled_budget()     上下文总预算不能爆
+          2) 预算内有富余 → 直接返回完整 prompt
+          3) 预算不够     → 砍每张表的字段数到 24；再不够就抛错（宁可报错也不让模型猜）
+
+        context 字段（来自 backend/agent/contracts.py:XiYanPromptContext）：
+          - source_id / dialect / schema_signature
+          - question / task_goal / required_object_ids / planned_output_fields
+          - schema_closure_object_ids / allowed_field_ids / max_rows
         """
+        # 第 1 关：先校验总预算（输入+输出+safety_margin）不能超过本地模型上下文窗口
+        # 防止"prompt 拼出来了，但生成时一定爆 OOM"
         self._validate_controlled_budget()
-        compact_schema = self._format_compact_metadata(metadata, context.schema_closure_object_ids)
+
+        # With the 6200-token input budget, reuse the Chat-quality metadata:
+        # table summaries, column comments and foreign-key hints for the full
+        # retrieve-stage schema closure.  The plan objects remain an execution
+        # contract below; keeping their join neighbours here lets XiYan choose
+        # the documented relationship rather than inventing one.
+        schema_objects = context.schema_closure_object_ids or context.required_object_ids
+        annotated_schema = self._format_metadata(metadata, schema_objects)
+        source_profile = self.get_agent_source_template(context.source_id)
+        source_examples = self._agent_source_examples(context.source_id, context.question)
+        catalog_hint = catalog_prompt_hint(
+            context.source_id,
+            [table.get("name", "") for table in metadata.get("tables", [])],
+        )
+
+        # 第 3 步：拼装"硬约束"列表 —— 这些是 Agent 链路上游已经审过的"金科玉律"
         rules = [
             "Only output one SELECT or WITH SQL statement, with no explanation or Markdown.",
             "Use only tables and fields shown in Schema. Never invent fields or access another source.",
             f"Use {context.dialect} syntax and add a LIMIT no greater than {context.max_rows} when the query can return detail rows.",
         ]
+        # 以下三行是"plan 阶段审过的"——把 plan 摘要回灌进 prompt，等于把"批准过的事"硬塞给模型
         if context.task_goal:
             rules.append(f"Approved task goal (must be implemented without narrowing it): {context.task_goal}")
         if context.required_object_ids:
             rules.append(f"Approved task objects: {', '.join(context.required_object_ids)}. Use every object required to implement the goal's filters and joins.")
         if context.planned_output_fields:
             rules.append(f"Planned output fields: {', '.join(context.planned_output_fields)}. Do not replace a detail-record request with an unrelated aggregate.")
+        # 全局规则：中文"YYYY年M月"必须用半开区间 [月初, 下月初)
         rules.append("For every Chinese YYYY年M月 constraint, use an explicit half-open range from YYYY-MM-01 00:00:00 (inclusive) to the following month YYYY-MM-01 00:00:00 (exclusive).")
-        if context.source_id in {"mysql_police_address", "police_address"}:
-            rules.extend([
-                "For a Chinese calendar month such as 2026 year 1 month, use alert_time >= '2026-01-01 00:00:00' AND alert_time < '2026-02-01 00:00:00'. Never use the next day as the upper bound.",
-                "Do not add alert type or status filters unless the approved task goal explicitly asks for them.",
-                "When querying a named involved person, JOIN alert_involvement i ON i.alert_no = a.alert_no and filter i.name. For a suspect, filter i.role_code = 'SUSPECT'.",
-                "For the police_alert base table the status field is alert_status. alert_status_code belongs to the alert-detail view only. If joining dict_alert_role, use r.role_code = i.role_code, never r.role_id = i.role_code.",
-                "警务报警统计优先使用 v_nl2sql_alert_detail；月份必须使用 alert_time 的半开区间。",
-                "治安报警使用 alert_type_code = 'SECURITY'；已结案使用 alert_status_code = 'CLOSED'；区域使用 district_name。",
-                "统计警情数量必须使用 COUNT(DISTINCT alert_no)，不要查询人员或地址表。",
-                "示例：2026年1月东城区已结案治安报警，查询 v_nl2sql_alert_detail，条件为 district_name = '东城区'、alert_type_code = 'SECURITY'、alert_status_code = 'CLOSED'、alert_time >= '2026-01-01 00:00:00' AND alert_time < '2026-02-01 00:00:00'。",
-                "当前居住人员才使用 v_nl2sql_person_current_address；小区名称用 full_address LIKE。",
-            ])
-        prompt = "\n".join([
+        # 数据源专属业务规则（半开日期、最新价视图、地址别名 LIKE…）
+        # 这份规则同时在 chat 路径（build_xiyan_prompt）和 agent 规划（QwenPlanner）里被引用
+        rules.extend(source_profile["sql_rules"])
+        # These are the detailed, source-specific semantic constraints already
+        # proven in the Chat template.  They complement (rather than replace)
+        # the short universal rules above.
+        rules.extend(self._agent_reference_rules(context.source_id, context.question))
+
+        # Keep the same source-specific examples used by Chat.  The model must
+        # adapt them only to the approved schema above.
+        def render(schema_text: str, *, include_catalog: bool, include_examples: bool) -> str:
+            parts = [
             "You are a controlled Text-to-SQL generator.",
             f"Source: {context.source_id}; dialect: {context.dialect}",
             f"Question: {context.question}",
-            "Schema:",
-            compact_schema,
-            "Rules:",
+            "Shared SQL principles (same base template as Chat):",
+            self.system_prompt,
+            "Final selected schema (all listed tables, fields, comments, and foreign keys are authoritative):",
+            schema_text,
+            "SQL:\n```sql",   # 末尾留个开口，模型接着写 SQL
+        ] + (
+            ["Catalog and business synonym reference:", catalog_hint]
+            if include_catalog and catalog_hint else []
+        ) + [
+            "Approved execution contract:",
             *[f"- {rule}" for rule in rules],
-            "SQL:\n```sql",
-        ])
+        ] + (
+            ["Source-specific reference example (adapt only to the approved Schema):", source_examples]
+            if include_examples and source_examples else []
+        ) + ["SQL:\n```sql"]
+            parts.remove("SQL:\n```sql")
+            return "\n".join(parts)
+
+        prompt = render(annotated_schema, include_catalog=True, include_examples=True)
+
+        # 第 5 关：预算足够就直接返回（绝大多数情况走这里）
         if self._estimate_xiyan_tokens(prompt) <= settings.agent_xiyan_prompt_token_budget:
             return prompt
 
-        # Preserve the question, dialect and source-specific rules first.  Only
-        # the least useful schema detail (excess columns) is compacted further.
-        compact_schema = self._format_compact_metadata(
-            metadata,
-            context.schema_closure_object_ids,
-            max_fields_per_object=24,
-        )
-        prompt = prompt.replace(self._format_compact_metadata(metadata, context.schema_closure_object_ids), compact_schema)
+        # 第 6 关（兜底）：超出预算。保留问题/方言/规则，只压缩 schema 的字段数
+        # 优先级：用户问题 + 方言 + 业务规则 > schema 字段
+        # 这里用 max_fields_per_object=24 截断多余的列，加 "…" 标记
+        prompt = render(annotated_schema, include_catalog=False, include_examples=False)
+        # 压缩后还超就抛错——不静默提交截断的 prompt 给模型
+        # 这种情况通常是 schema_closure_object_ids 里塞了太多表，应该回去重新做表选择
         if self._estimate_xiyan_tokens(prompt) > settings.agent_xiyan_prompt_token_budget:
-            raise ValueError("CONTROLLED_XIYAN_PROMPT_BUDGET_EXCEEDED")
+            raise ValueError("CONTROLLED_XIYAN_COMPLETE_SCHEMA_BUDGET_EXCEEDED")
         return prompt
+
+    def _agent_reference_rules(self, data_source: str, question: str) -> list[str]:
+        """Select only the source rules relevant to the current intent.
+
+        Chat can afford a broad knowledge block.  The local XiYan generator
+        should instead receive the common source contract plus the one rule
+        group that matches the user's intent; this avoids unrelated address,
+        people, and residence rules competing for attention.
+        """
+        question_lower = question.lower()
+        if data_source not in {"mysql_police_address", "police_address"}:
+            return []
+
+        rules: list[str] = []
+        if any(term in question_lower for term in ("地址别名", "别名")):
+            rules.extend([
+                "Address aliases must join addr_alias aa to addr_standard_address sa ON aa.std_address_code = sa.std_address_code; return aa.alias_name and sa.full_address. Never use nonexistent aa.std_address_id.",
+                "For an address-alias question containing a literal name X, filter aa.alias_name LIKE '%X%'; extract the user's actual name rather than searching a placeholder.",
+            ])
+        if any(term in question_lower for term in ("当前居住", "登记居住", "居住人员", "出租房", "小区")):
+            rules.extend([
+                "For current registered residents use v_nl2sql_person_current_address. For rental houses and current resident counts use v_nl2sql_house_occupancy. These current-state views do not expose is_current, so never add is_current = 1 to them.",
+                "For a residential-compound name use full_address LIKE '%小区名%'. residential_code is a code, and v_nl2sql_house_occupancy has no residential_name column.",
+            ])
+        if any(term in question_lower for term in ("嫌疑", "受害", "证人", "亲属", "涉及人员", "涉案人员")):
+            rules.append(
+                "For involved people, suspects, victims, witnesses, or relatives, join alert_involvement ai ON pa.alert_no = ai.alert_no. Use ai.name and ai.role_code; role codes are SUSPECT, VICTIM, WITNESS, RELATIVE, and INVOLVED."
+            )
+        if "未关联案事件" in question_lower or "没有案事件" in question_lower:
+            rules.append(
+                "For closed alerts without an event, use LEFT JOIN alert_event e ON e.alert_no = a.alert_no with a.alert_status_code = 'CLOSED' AND e.alert_no IS NULL."
+            )
+        return rules
+
+    def _agent_source_examples(self, data_source: str, question: str) -> str:
+        """Return one intent-matched few-shot, not every example of a source."""
+        question_lower = question.lower()
+        if data_source in {"mysql_police_address", "police_address"}:
+            if any(term in question_lower for term in ("地址别名", "别名")):
+                return """## 警务示例：地址别名查询
+```sql
+SELECT aa.alias_name AS 地址别名, sa.full_address AS 标准地址
+FROM addr_alias aa
+JOIN addr_standard_address sa ON aa.std_address_code = sa.std_address_code
+WHERE aa.alias_name LIKE '%目标词%'
+LIMIT 100;
+```"""
+            if any(term in question_lower for term in ("当前居住", "登记居住", "居住人员", "小区")):
+                return """## 警务示例：小区当前登记居住人员统计
+```sql
+SELECT COUNT(DISTINCT person_code) AS 当前登记人数
+FROM v_nl2sql_person_current_address
+WHERE full_address LIKE '%目标小区%';
+```"""
+            if any(term in question_lower for term in ("报警内容", "警情内容", "提到", "关键词")):
+                return """## 警务示例：报警内容关键词统计
+```sql
+SELECT COUNT(DISTINCT alert_no) AS 警情数量
+FROM v_nl2sql_alert_detail
+WHERE alert_content LIKE '%目标词%';
+```"""
+            return """## 警务示例：按条件统计警情数量
+```sql
+SELECT COUNT(DISTINCT alert_no) AS 警情数量
+FROM v_nl2sql_alert_detail
+WHERE alert_time >= '起始时间'
+  AND alert_time < '结束时间';
+```"""
+        return self._few_shots_for(data_source)
+
+    def get_agent_source_template(self, data_source: str) -> Dict[str, Any]:
+        """【项目里最关键的"共享规则表"】返回数据源专属 profile，被三处共用：
+
+          1) build_xiyan_prompt()             — chat 路径把 sql_rules 写到 prompt 末尾
+          2) build_controlled_xiyan_prompt()  — agent 路径同样把 sql_rules 写进 prompt
+          3) QwenPlanner / QwenPlanReviewer   — agent 规划/审核阶段把它当作只读 planning_tool 喂给 LLM
+
+        这种"一处维护、三处共享"的设计，避免 chat 和 agent 两条路径在业务规则上"语义漂移"——
+        比如某天把"半开日期区间"从规则里删了，chat 和 agent 行为会同时改变，不会出现一个对、一个错。
+
+        字段说明（每个 profile）：
+          - template_id   : 给运维/审计看的人类可读 ID
+          - planning_hint : 规划阶段用的简短提示（"Hadoop 由本地 SQLite 执行 CSV 表"等）
+          - sql_rules     : 必带的 SQL 业务规则数组（半开日期、最新价视图、地址别名 LIKE…）
+
+        加新数据源时：在这里加一个 profile 即可，三处调用方都会自动生效。
+        """
+        profiles: Dict[str, Dict[str, Any]] = {
+            "hive_hadoop_demo": {
+                "template_id": "hadoop_sqlite_csv",
+                "planning_hint": "Hadoop demo is executed as local SQLite CSV tables; monthly dates are TEXT YYYY-MM-DD.",
+                "sql_rules": [
+                    "For monthly Hadoop statistics use substr(event_date, 1, 7); never use TO_DATE, DATE_FORMAT or date_trunc.",
+                    "Brand trends require hadoop_order_events joined to hadoop_product_dim by product_id.",
+                ],
+            },
+            "postgres_stock": {
+                "template_id": "postgres_stock_market",
+                "planning_hint": "Keep latest-price views separate from historical price detail when a historical date range is requested.",
+                "sql_rules": [
+                    "v_stock_latest_price has no sector_code; join stock_symbols on symbol and exchange_code for sector filters.",
+                    "Historical comparisons use v_stock_price_detail with a half-open date range.",
+                ],
+            },
+            "sqlite_demo": {
+                "template_id": "sqlite_business_demo",
+                "planning_hint": "Use indexed half-open date ranges and explicit employee/sales/department joins.",
+                "sql_rules": [
+                    "Use half-open date ranges instead of YEAR or STRFTIME for year filters.",
+                    "Department sales join sales -> employees -> departments; use LEFT JOIN from departments only when zero-sales departments are requested.",
+                ],
+            },
+            "mysql_police_address": {
+                "template_id": "mysql_police_address",
+                "planning_hint": "Use alert-detail views for police aggregates; named involved people require the involvement relation and role code.",
+                "sql_rules": [
+                    "For a Chinese calendar month use alert_time >= first day and < following month's first day; never use the next day as upper bound.",
+                    "Do not add alert type or status filters unless the approved task goal explicitly asks for them.",
+                    "Named involved people require JOIN alert_involvement i ON i.alert_no = a.alert_no; suspects require i.role_code = 'SUSPECT'.",
+                    "police_alert uses alert_status; alert_status_code belongs to the alert-detail view. Join dict_alert_role by role_code, never role_id.",
+                    "警务报警统计优先使用 v_nl2sql_alert_detail；治安报警使用 alert_type_code = 'SECURITY'；已结案使用 alert_status_code = 'CLOSED'；区域使用 district_name。",
+                    "统计警情数量使用 COUNT(DISTINCT alert_no)。当前居住人员使用 v_nl2sql_person_current_address，小区名称使用 full_address LIKE。",
+                ],
+            },
+            "police_address": {
+                "template_id": "mysql_police_address",
+                "planning_hint": "Use alert-detail views for police aggregates; named involved people require the involvement relation and role code.",
+                "sql_rules": [],
+            },
+            "gauss_ecommerce": {
+                "template_id": "gauss_ecommerce",
+                "planning_hint": "All-city completed-order questions must retain cities with zero matching orders.",
+                "sql_rules": [
+                    "For all-city completed-order totals, start from customers and LEFT JOIN orders; put status and date filters in ON and use COALESCE(SUM(...), 0).",
+                    "v_order_summary uses customer_city; customers uses city.",
+                ],
+            },
+            "dameng_ecommerce": {
+                "template_id": "dameng_ecommerce_oracle",
+                "planning_hint": "Use Oracle-compatible uppercase objects and retain zero-order cities for all-city totals.",
+                "sql_rules": [
+                    "For all-city completed-order totals, start from CUSTOMERS and LEFT JOIN ORDERS; put status and date filters in ON and use COALESCE(SUM(...), 0).",
+                    "V_ORDER_SUMMARY uses CUSTOMER_CITY; CUSTOMERS uses CITY.",
+                ],
+            },
+            "countries_graphql": {
+                "template_id": "graphql_virtual_table",
+                "planning_hint": "GraphQL data is a fixed backend response mapped to a read-only virtual table.",
+                "sql_rules": ["Use only the retrieved virtual-table Schema; never construct GraphQL operations or URLs."],
+            },
+            "rest_api_demo": {
+                "template_id": "rest_virtual_table",
+                "planning_hint": "REST data is a fixed backend response mapped to a read-only virtual table.",
+                "sql_rules": ["Use only the retrieved virtual-table Schema; never construct URLs, methods or request parameters."],
+            },
+        }
+        profile = profiles.get(data_source, {
+            "template_id": "generic_readonly_sql",
+            "planning_hint": "Use only the retrieved Schema closure and source dialect.",
+            "sql_rules": [],
+        }).copy()
+        if data_source == "police_address":
+            profile["sql_rules"] = profiles["mysql_police_address"]["sql_rules"]
+        return {"source_id": data_source, **profile}
 
     @staticmethod
     def _estimate_xiyan_tokens(text: str) -> int:
-        """Conservative local estimate calibrated against Ollama's Qwen tokens."""
+        """粗估 prompt 的 token 数。
+
+        这是个保守估计：用 "每 3 字符 ≈ 1 token" 的近似公式。
+        CJK 和 ASCII 的实际 token 化方式不同，这里故意把分母取大（3 而不是 4），
+        留出余量防止"估算说够用，实际爆 OOM"。
+        """
         # CJK characters and ASCII identifiers are tokenized differently.  The
         # 2.5-character estimate intentionally leaves room below the 4K limit.
         return max(1, (len(text) + 2) // 3)
 
     @staticmethod
     def _validate_controlled_budget() -> None:
+        """校验"输入预算 + 输出预算 + 安全边际"的总和不能超过模型上下文窗口。
+
+        在拼 prompt 之前先检查配置是否合理——
+        如果配置本身就不可能（光 prompt+output 就超过 4K），直接抛错，提示运维去改 settings，
+        而不是等到运行时才暴 OOM。
+        """
         total = (
             settings.agent_xiyan_prompt_token_budget
             + settings.agent_xiyan_max_output_tokens
@@ -553,7 +859,14 @@ Schema 版本：{controlled_context.schema_signature or '未提供'}
         relevant_tables: List[str],
         max_fields_per_object: int | None = None,
     ) -> str:
-        """Emit field names/types only, avoiding long comments that exhaust local context."""
+        """【Agent 路径专用】把元数据压成 "表名(字段 类型, ...)" 单行格式。
+
+        与 _format_metadata() 的差别：
+          - 本函数：不写注释、不写外键、不写 CREATE TABLE 包装——纯字段清单
+          - _format_metadata()：完整的 CREATE TABLE 风格（注释、外键关系都保留）
+
+        触发"再压缩"：当 max_fields_per_object 给了上限时，超过上限的字段会被截掉，末尾加 "…"
+        """
         relevant = set(relevant_tables)
         lines: list[str] = []
         for table in metadata.get("tables", []):
@@ -571,60 +884,78 @@ Schema 版本：{controlled_context.schema_signature or '未提供'}
         return "\n".join(lines) or "(no approved schema objects)"
 
     def _format_metadata(self, metadata: Dict[str, Any],
-                         relevant_tables: List[str] = None) -> str:
-        """将元数据格式化为易读的 CREATE TABLE 风格文本，方便模型理解
+                         relevant_tables: List[str] = None,
+                         max_fields_per_object: int | None = None) -> str:
+        """【Chat 路径专用】把元数据格式化成完整的 CREATE TABLE 风格文本。
+
+        为什么用 CREATE TABLE 风格？
+          LLM 在训练时见过大量 CREATE TABLE 语句，用这种格式喂给它，它能最快最准确地理解：
+            - 有哪些表
+            - 每张表有哪些字段、什么类型
+            - 表之间的外键关系
+          效果比直接传 JSON 好得多（这是 NL2SQL 领域的工程经验）。
+
+        输入 metadata 结构（参考 contracts.MetadataContext.tables 字段）：
+            {
+              "tables": [
                 {
-            "tables": [
-                {
-                    "name": "employees",
-                    "comment": "员工信息表",
-                    "columns": [
-                        {"name": "id", "type": "INTEGER", "comment": "主键"},
-                        {"name": "name", "type": "TEXT", "comment": ""}
-                    ],
-                    "primary_key": ["id"],
-                    "foreign_keys": [
-                        {"column": "department_id", "ref_table": "departments", "ref_column": "id"}
-                    ]
+                  "name": "employees",
+                  "comment": "员工信息表",
+                  "summary": "...",        # 可选，比 comment 更精炼
+                  "columns": [
+                    {"name": "id", "type": "INTEGER", "comment": "主键"},
+                    {"name": "name", "type": "TEXT", "comment": ""}
+                  ],
+                  "foreign_keys": [
+                    {"column": "department_id", "ref_table": "departments", "ref_column": "id"}
+                  ]
                 },
-                {
-                    "name": "departments",
-                    ...
-                }
-            ],
-            "total_tables": 3
-        }
+                ...
+              ]
+            }
+
+        输出示例：
+            ### 表: employees (员工信息表)
+            CREATE TABLE employees (
+                id INTEGER -- 主键,
+                name TEXT,
+                -- 外键关系:
+                --   department_id -> departments(id)
+            );
         """
 
         # 提取表名
         tables = metadata.get("tables", [])
-        # 遍历，只保存相关表
+        # 遍历，只保存相关表（relevant_tables 是上游表选择器筛过的白名单）
         if relevant_tables:
             tables = [t for t in tables if t["name"] in relevant_tables]
 
         lines = []
         for table in tables:
+            # summary 是元数据汇总器（metadata_summarizer.py）生成的精炼注释；
+            # 老数据源只有 comment 字段，所以两者取其一
             table_comment = table.get("summary") or table.get("comment", "")
             lines.append(f"### 表: {table['name']} ({table_comment})")
             lines.append("CREATE TABLE " + table['name'] + " (")
-            # "columns": [
-            # {"name": "id", "type": "INTEGER", "comment": "主键"},
-            # {"name": "name", "type": "TEXT", "comment": ""}]
             # 遍历每一列的 name, type, comment
-            for col in table.get("columns", []):
+            columns = table.get("columns", [])
+            if max_fields_per_object and len(columns) > max_fields_per_object:
+                columns = columns[:max_fields_per_object]
+            for col in columns:
                 comment = f" -- {col.get('comment', '')}" if col.get('comment') else ""
                 lines.append(f"    {col['name']} {col['type']}{comment},")
+            if max_fields_per_object and len(table.get("columns", [])) > max_fields_per_object:
+                lines.append("    -- ... remaining fields omitted only to fit the controlled prompt budget,")
 
             if table.get("foreign_keys"):
                 lines.append("    -- 外键关系:")
-                # "foreign_keys": [
-                #  {"column": "department_id", "ref_table": "departments", "ref_column": "id"}]
                 # 遍历每一个外键关系
                 for fk in table["foreign_keys"]:
                     lines.append(f"    --   {fk['column']} -> {fk['ref_table']}({fk['ref_column']})")
             lines.append(");")
             lines.append("")
 
+        # 兜底：万一没拼出任何内容，给模型一个明确提示，避免它瞎猜表名
         if not lines:
             return "（无可用元数据，请检查数据源连接）"
 

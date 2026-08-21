@@ -7,7 +7,7 @@ E:\SoftWare\anaconda\envs\fastapi_project\python.exe scripts\view_audit.py
 查看指定日期：
 E:\SoftWare\anaconda\envs\fastapi_project\python.exe scripts\view_audit.py --date 2026-07-28
 限制条数：
-E:\SoftWare\anaconda\envs\fastapi_project\python.exe scripts\view_audit.py --date 2026-08-07 --limit 1
+E:\SoftWare\anaconda\envs\fastapi_project\python.exe scripts\view_audit.py --date 2026-08-19 --limit 1
 列出已有日期：
 E:\SoftWare\anaconda\envs\fastapi_project\python.exe scripts\view_audit.py --list-dates
 旧审计仍在：
@@ -19,6 +19,7 @@ import argparse
 import json
 import sqlite3
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -28,7 +29,7 @@ for stream in (sys.stdout, sys.stderr):
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from backend.config.audit import audit_db_path, audit_root_dir, init_audit_db
+from backend.config.audit import audit_db_path, audit_root_dir, init_audit_db, prompt_template_to_text
 
 
 SEPARATOR = "=" * 88
@@ -49,6 +50,44 @@ def parse_json(raw: str | None, default: Any) -> Any:
         return json.loads(raw)
     except json.JSONDecodeError:
         return default
+
+
+def find_xiyan_prompt_from_trace(
+    audit_date: str,
+    *,
+    timestamp: str | None,
+    question: str | None,
+    data_source: str | None,
+) -> str | None:
+    """Find a legacy controlled-agent prompt in the same day's JSON trace."""
+    trace_dir = audit_root_dir().parent / "agent_traces" / audit_date
+    if not trace_dir.exists() or not question:
+        return None
+    try:
+        audit_time = datetime.fromisoformat(timestamp) if timestamp else None
+    except ValueError:
+        audit_time = None
+
+    best_prompt: str | None = None
+    best_delta = float("inf")
+    for path in trace_dir.glob("*.json"):
+        try:
+            trace = json.loads(path.read_text(encoding="utf-8"))
+            if trace.get("question") != question:
+                continue
+            task = ((trace.get("plan") or {}).get("subtasks") or [{}])[0]
+            if data_source and task.get("source_id") != data_source:
+                continue
+            prompt = prompt_template_to_text((trace.get("xiyan_sql_generation") or {}).get("prompt_template"))
+            if not prompt:
+                continue
+            created_at = datetime.fromisoformat(trace["created_at"])
+            delta = abs((created_at - audit_time).total_seconds()) if audit_time else 0.0
+            if delta < best_delta:
+                best_prompt, best_delta = prompt, delta
+        except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+            continue
+    return best_prompt
 
 
 def show_stage_timings(raw: str | None) -> None:
@@ -151,9 +190,15 @@ def main() -> None:
         if row["llm_thought"]:
             print("模型解释/提取 thought：")
             print(row["llm_thought"][:1000])
-        if row["prompt_template"]:
+        prompt_template = row["prompt_template"] or find_xiyan_prompt_from_trace(
+            audit_date,
+            timestamp=row["timestamp"],
+            question=row["question"],
+            data_source=row["data_source"],
+        )
+        if prompt_template:
             print("SQL 提示词：")
-            print(row["prompt_template"][:10000])
+            print(prompt_template)
         if row["raw_model_output"]:
             print("模型原始输出：")
             print(row["raw_model_output"][:1000])

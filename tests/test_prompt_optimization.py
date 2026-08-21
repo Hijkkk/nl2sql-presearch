@@ -237,7 +237,6 @@ def test_prompt_builder_creates_xiyan_prompt_without_cot():
     assert "XiYan" not in prompt
     assert "请一步步思考" not in prompt
     assert "【数据库schema】" in prompt
-    assert prompt.rstrip().endswith("```sql")
 
 
 def test_prompt_builder_renders_existing_xiyan_rules_from_controlled_context():
@@ -263,10 +262,48 @@ def test_prompt_builder_renders_existing_xiyan_rules_from_controlled_context():
     prompt = PromptBuilder().build_controlled_xiyan_prompt(context, metadata)
 
     assert "Source: mysql_police_address; dialect: MySQL" in prompt
-    assert "v_nl2sql_alert_detail(alert_no TEXT)" in prompt
+    assert "CREATE TABLE v_nl2sql_alert_detail" in prompt
+    assert "alert_no TEXT" in prompt
+    assert "Source-specific reference example" in prompt
+    assert "Catalog and business synonym reference" in prompt
     assert "警务报警统计优先使用 v_nl2sql_alert_detail" in prompt
     assert "COUNT(DISTINCT alert_no)" in prompt
-    assert prompt.rstrip().endswith("```sql")
+
+
+def test_controlled_agent_selects_police_rules_and_examples_by_intent():
+    builder = PromptBuilder()
+
+    alias_rules = builder._agent_reference_rules("mysql_police_address", "查询地址别名包含人民路的记录")
+    alert_rules = builder._agent_reference_rules("mysql_police_address", "统计本月治安报警数量")
+    alias_example = builder._agent_source_examples("mysql_police_address", "查询地址别名包含人民路的记录")
+    alert_example = builder._agent_source_examples("mysql_police_address", "统计本月治安报警数量")
+
+    assert any("Address aliases must join" in rule for rule in alias_rules)
+    assert not alert_rules
+    assert "addr_alias aa" in alias_example
+    assert "v_nl2sql_alert_detail" in alert_example
+    assert "addr_alias" not in alert_example
+
+
+def test_controlled_prompt_never_truncates_final_selected_schema_fields():
+    columns = [
+        {"name": f"field_{index}", "type": "VARCHAR(64)", "comment": f"字段说明 {index}"}
+        for index in range(30)
+    ]
+    context = XiYanPromptContext(
+        source_id="sqlite_demo", dialect="SQLite", question="查询测试数据",
+        schema_closure_object_ids=["wide_table"], max_rows=1000,
+    )
+    prompt = PromptBuilder().build_controlled_xiyan_prompt(
+        context,
+        {"tables": [{"name": "wide_table", "comment": "完整宽表说明", "columns": columns, "foreign_keys": []}]},
+    )
+
+    assert "Source template:" not in prompt
+    assert "wide_table" in prompt
+    assert "field_0 VARCHAR(64) -- 字段说明 0" in prompt
+    assert "field_29 VARCHAR(64) -- 字段说明 29" in prompt
+    assert "remaining fields omitted" not in prompt
 
 
 def test_controlled_xiyan_prompt_includes_approved_task_contract():

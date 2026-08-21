@@ -194,36 +194,58 @@ class MetadataSummarizer:
         use_llm: bool = True,
     ) -> str:
         """
-        为单个表生成简短摘要（1-2句业务描述 + 关键字段含义）
+        存中有这条记录？
+          ├─ 否 → 重新生成
+          └─ 是 ↓
+             强制刷新(refresh=True)？
+               ├─ 是 → 重新生成
+               └─ 否 ↓
+                  use_llm=False？
+                    ├─ 是 → ✅ 直接用缓存（规则版也够用）
+                    └─ 否 ↓
+                       缓存是 LLM 生成的？
+                         ├─ 是 → ✅ 用缓存（高质量版本）
+                         └─ 否 →  重新用 LLM 生成（规则版升级为 LLM 版）
+        :param table_name:
+        :param columns:
+        :param comment:
+        :param data_source:
+        :param table:
+        :param refresh:
+        :param use_llm:
+        :return:
         """
         table_for_key = table or {"name": table_name, "comment": comment, "columns": columns}
         cache_key = self._build_cache_key(data_source, table_for_key)
         cached = self.cache.get(cache_key)
-        # 缓存中有这条记录？
-        #   ├─ 否 → 重新生成
-        #   └─ 是 ↓
-        #      强制刷新(refresh=True)？
-        #        ├─ 是 → 重新生成
-        #        └─ 否 ↓
-        #           use_llm=False？
-        #             ├─ 是 → ✅ 直接用缓存（规则版也够用）
-        #             └─ 否 ↓
-        #                缓存是 LLM 生成的？
-        #                  ├─ 是 → ✅ 用缓存（高质量版本）
-        #                  └─ 否 →  重新用 LLM 生成（规则版升级为 LLM 版）
-        if cached and not refresh and (not use_llm or cached.get("generated_by") == "llm"):
-            # not use_llm → True，或者 cached.get("generated_by") == "llm"
-            # LLM 生成的
-            # "llm"
-            # ✅ 用缓存
-            # 质量高，值得复用
 
-            # 规则生成的
-            # "fallback"
-            # ❌ 不用缓存
-            # 用户要求用 LLM，规则版质量不够，重新生成
-            return str(cached.get("summary") or "")
+        # 缓存复用策略（按优先级从高到低）：
+        #
+        # 1. refresh=True：无条件跳过缓存，下面会重新生成并覆盖缓存。
+        # 2. use_llm=False：不允许调用 LLM；只要有有效缓存（LLM 或 fallback）就复用。
+        # 3. use_llm=True：只复用 LLM 摘要。若命中的是 fallback，继续向下调用 LLM，
+        #    将低成本的规则摘要升级为质量更高的 LLM 摘要。
+        #
+        # 空字符串不能视为有效缓存，否则一次异常/旧数据会使该表永久返回空摘要。
+        cached_summary = str((cached or {}).get("summary") or "").strip()
+        has_usable_cache = bool(cached_summary)
+        cached_is_llm_summary = (cached or {}).get("generated_by") == "llm"
 
+        # refresh=True：无条件跳过缓存，重新生成并覆盖缓存。
+        # use_llm=False：不调用 LLM；只要缓存有效，无论缓存来自 LLM 还是 fallback，都直接复用。
+        # use_llm=True：
+        #               命中 LLM 缓存：直接复用；
+        #               命中 fallback 缓存：调用 LLM 重新生成，把 fallback 升级为 LLM 摘要。
+        # 缓存摘要为空时不再视为命中，避免持续返回空摘要。
+        should_reuse_cache = (
+            not refresh
+            and has_usable_cache
+            and (not use_llm or cached_is_llm_summary)
+        )
+        if should_reuse_cache:
+            return cached_summary
+
+        # 不要LLM 直接生成 存起来
         if not use_llm:
             summary = self._fallback_summary(table_name, columns, comment)
             self.cache[cache_key] = {
@@ -246,6 +268,7 @@ class MetadataSummarizer:
 
 输出格式：仅返回描述文本，不要解释。"""
 
+        # 要LLM 存起来
         summary = self._call_llm(prompt)
         if summary:
             self.cache[cache_key] = {
@@ -263,6 +286,8 @@ class MetadataSummarizer:
                 "summary": summary,
                 "generated_by": "fallback",
             }
+
+        # 持久化存储
         self._save_cache()
         return summary
 
@@ -279,7 +304,7 @@ class MetadataSummarizer:
         为整个 metadata 生成摘要版本，返回类似原 metadata 但每个表有 'summary' 字段，columns 精简
         :param metadata:
         :param data_source:
-        :param refresh:
+        :param refresh: 如果强制刷新 则重新生成
         :param use_llm:
         :return:
         """

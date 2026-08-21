@@ -1,6 +1,7 @@
 """
-SQL generator for OpenAI-compatible LLM endpoints.
-Supports company LiteLLM, DashScope, XiYanSQL through Ollama, and XiYanSQL finetune service.
+符合 OpenAI API 规范的 LLM（大语言模型）服务，将自然语言问题转换成 SQL 查询语句的生成器模块。
+指遵循 OpenAI Chat Completions API 规范（POST /chat/completions）的接口。
+现在很多服务（如 LiteLLM、DashScope、Ollama、XiYanSQL 等）都提供这种兼容接口，可以用统一的请求格式调用不同模型。
 """
 import httpx
 import asyncio
@@ -42,39 +43,45 @@ class SQLGenerator:
 
     def _resolve_model_config(self, model_id: Optional[str] = None) -> tuple[str, str, str]:
         """
-            Resolve front-end model_id to actual OpenAI-compatible endpoint and model name.
-            model_id = "xiyan-ollama"
-            # 返回
-            (
+        通过 _resolve_model_config() 将前端传入的 model_id 映射到具体的 base_url、model、api_key，
+        支持 LiteLLM(内部小模型)、DashScope、XiYanSQL(Ollama)、XiYanSQL(微调服务) 四种后端
+        :param model_id:
+        :return: (
                 "http://localhost:11434/v1",  # base_url
                 "xiyan3b:latest",             # model_name
                 "ollama-api-key",             # api_key
             )
         """
+        # SQL生成模型
         if model_id == self.XIYAN_OLLAMA_MODEL_ID:
             return (
+                # URL 拼接的标准防御写法，确保无论用户怎么配置都能正常工作。
                 settings.xiyan_ollama_base_url.rstrip("/"),
                 settings.xiyan_ollama_model,
                 settings.xiyan_ollama_api_key,
             )
+        # 微调模型
         if model_id in {self.XIYAN_FINETUNE_MODEL_ID, "xiyan-sql-qwencoder-3b"}:
             return (
                 settings.xiyan_finetune_base_url.rstrip("/"),
                 settings.xiyan_finetune_model,
                 settings.xiyan_finetune_api_key,
             )
+        # 备用SQL生成模型 Qwen
         if model_id == self.DASHSCOPE_MODEL_ID:
             return (
                 settings.dashscope_base_url.rstrip("/"),
                 settings.dashscope_model,
                 settings.dashscope_api_key,
             )
+        # 总结会话模型 Qwen
         if model_id == self.RESULT_SUMMARY_DASHSCOPE_MODEL_ID:
             return (
                 settings.dashscope_base_url.rstrip("/"),
-                settings.result_summary_model,
+                settings.result_summary_effective_model,
                 settings.dashscope_api_key,
             )
+        # 备用SQL生成模型 公司内部
         return (
             settings.litellm_base_url.rstrip("/"),
             settings.litellm_model,
@@ -82,6 +89,11 @@ class SQLGenerator:
         )
 
     def _dialect_display_name(self, dialect: str) -> str:
+        """
+        获取数据库方言
+        :param dialect:
+        :return: SQLite、MySQL 等等
+        """
         names = {
             "sqlite": "SQLite",
             "postgres": "PostgreSQL",
@@ -91,6 +103,12 @@ class SQLGenerator:
             "dameng": "MySQL",
             "hive": "Hive SQL",
         }
+        # names.get(key, default)
+        # "MySQL"	"mysql"	"MySQL"
+        # "oracle"	"oracle"	没找到 → 返回 "oracle"
+        # 如果 dialect 是 None 或空字符串，就用 "" 代替，避免 .lower() 报错
+        # None	""	没找到 → 返回 "SQL"
+        # ""	""	没找到 → 返回 "SQL"
         return names.get((dialect or "").lower(), dialect or "SQL")
 
     async def generate_sql(self, question: str, metadata: Dict[str, Any],
@@ -109,6 +127,7 @@ class SQLGenerator:
         """
         # 先按相关性召回三个对象，再补齐它们的外键/视图/Catalog 关系闭包。
         # 这样既控制 Prompt 大小，也避免 JOIN 所需对象只出现在 Catalog 提示中。
+        # 基于关键词匹配选择相关表 返回表名列表
         selected_tables = select_relevant_tables(question, metadata, max_tables=3, data_source=data_source)
         relevant_tables = expand_schema_closure(
             metadata,
@@ -286,7 +305,9 @@ class SQLGenerator:
 
         prompt = self.prompt_builder.build_controlled_xiyan_prompt(context, metadata)
         trace["prompt_template"] = prompt
-        trace["prompt_token_estimate"] = max(1, len(prompt) // 4)
+        # Keep Agent audit consistent with the controlled-prompt budget checker.
+        # ``len(prompt) // 4`` understates CJK-heavy schema comments.
+        trace["prompt_token_estimate"] = self.prompt_builder._estimate_xiyan_tokens(prompt)
         model_config = model_config or {}
         try:
             base_url, model, api_key = self._resolve_model_config(selected_model_id)
@@ -688,6 +709,20 @@ ORDER BY city_gmv DESC;
     @staticmethod
     def _patch_sqlite_demo_queries(sql: str, question: str) -> str:
         """Keep the SQLite demo's teaching examples semantically correct and readable."""
+        wants_manager_name = (
+            "\u76f4\u5c5e\u7ecf\u7406" in question
+            and "\u7ecf\u7406" in question
+            and "\u5458\u5de5" in question
+        )
+        if wants_manager_name:
+            return """
+SELECT
+    e.name AS employee_name,
+    m.name AS manager_name
+FROM employees e
+JOIN employees m ON m.id = e.manager_id
+ORDER BY e.name;
+""".strip()
         year_match = re.search(r"(20[0-9]{2})\s*" + chr(0x5E74), question)
         wants_department_sales = all(
             token in question

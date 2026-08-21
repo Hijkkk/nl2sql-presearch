@@ -1,7 +1,7 @@
 import asyncio
 
 from backend.agent.contracts import AgentPlan, MetadataContext, ReviewerDecision, SourceCandidate, SourceDescriptor
-from backend.agent.graph import ControlledAgentGraph
+from backend.agent.graph import ControlledAgentGraph, _stage_timings
 from backend.agent.contracts import AgentExecutionResult
 from backend.config.config import settings
 
@@ -20,7 +20,7 @@ def _prepared_data():
 
 
 class FakePreparation:
-    def prepare(self, question):
+    def prepare(self, question, source_hint=None):
         return _prepared_data()
 
 
@@ -118,6 +118,8 @@ def test_langgraph_passes_reviewer_reason_to_revision_planner(monkeypatch):
 
     assert state["status"] == "approved_record_only"
     assert planner.reasons == [[], ["QUESTION_SCOPE_CHANGED"]]
+    revision_event = [event for event in state["events"] if event["node"] == "plan"][-1]
+    assert revision_event["planner_reply"]["revision_summary_zh"]
 
 
 def test_langgraph_ends_safely_when_retrieval_fails():
@@ -144,3 +146,17 @@ def test_langgraph_executes_only_when_record_only_is_disabled(monkeypatch):
     assert state["status"] == "executed_summarized"
     assert state["execution"].sql == "SELECT 1"
     assert state["answer"] == "查询成功，共 1 条记录。"
+
+
+def test_stage_timings_aggregate_each_revision_attempt():
+    timings = _stage_timings(
+        [
+            {"node": "retrieve", "duration_ms": 10},
+            {"node": "plan", "duration_ms": 25},
+            {"node": "plan", "duration_ms": 30},
+            {"node": "review", "duration_ms": 5},
+        ],
+        0.2,
+    )
+
+    assert timings == {"total": 0.2, "retrieve": 0.01, "plan": 0.055, "review": 0.005}

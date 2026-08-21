@@ -78,6 +78,21 @@ def test_amap_weather_question():
     assert any("config/district" in call["url"] for call in client.calls)
 
 
+def test_amap_geocode_and_search_have_user_readable_summaries():
+    service = AmapLBSService(http_client=FakeAmapClient())
+
+    geocode_summary = service._build_insight(
+        "地理编码", [{"formatted_address": "北京市东城区天安门", "location": "116.397428,39.90923"}]
+    )
+    search_summary = service._build_insight(
+        "关键字搜索", [{"name": "示例咖啡店", "address": "东城区示例路"}, {"name": "第二家咖啡店", "adname": "西城区"}]
+    )
+
+    assert "经度为 116.397428" in geocode_summary
+    assert "纬度为 39.90923" in geocode_summary
+    assert "示例咖啡店（东城区示例路）" in search_summary
+
+
 def test_amap_distance_question_resolves_addresses():
     client = FakeAmapClient()
     service = AmapLBSService(http_client=client)

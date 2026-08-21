@@ -34,6 +34,20 @@ SOURCE_ROUTING_TERMS: dict[str, tuple[str, ...]] = {
     "countries_graphql": ("国家", "洲", "货币", "语言", "首都"),
 }
 
+# A direct domain term is stronger evidence than a generic embedding match.
+# These seeds only affect which already-authorized source candidates survive
+# the small candidate budget; they never grant database access.
+SOURCE_REQUIRED_TERMS: dict[str, tuple[str, ...]] = {
+    "sqlite_demo": ("员工", "部门", "薪资"),
+    "mysql_police_address": ("警情", "报警", "治安", "案件", "结案", "辖区"),
+    "postgres_stock": ("股票", "证券", "基金", "etf", "行情"),
+    "hive_hadoop_demo": ("hadoop", "hive", "大数据", "分布式"),
+    "dameng_ecommerce": ("达梦",),
+    "gauss_ecommerce": ("opengauss", "gauss"),
+    "rest_api_demo": ("天气", "气温", "湿度", "预报"),
+    "countries_graphql": ("国家", "洲", "货币", "语言", "首都"),
+}
+
 
 def _required_schema_seeds(question: str, source_id: str, available_objects: set[str]) -> list[str]:
     """Return small, intent-critical schema seeds before semantic reranking.
@@ -49,6 +63,8 @@ def _required_schema_seeds(question: str, source_id: str, available_objects: set
     if source_id in {"mysql_police_address", "police_address"}:
         # Unicode escapes keep this server-side matching stable even if a
         # Windows editor or shell has a non-UTF-8 code page.
+        # 翻译成人话：问题里有没有出现"报警/警情/接警/案发/治安"其中任意一个？
+        # 你的问题里有"报警" → True
         asks_alert = any(term in question_lower for term in ("\u62a5\u8b66", "\u8b66\u60c5", "\u63a5\u8b66", "\u6848\u53d1", "\u6cbb\u5b89"))
         asks_involved_person = any(
             term in question_lower
@@ -58,7 +74,30 @@ def _required_schema_seeds(question: str, source_id: str, available_objects: set
             # An alert/person-role question needs the alert record, its
             # involvement bridge, and the role dictionary as one unit.
             seeds.extend(("police_alert", "alert_involvement", "dict_alert_role"))
-    return [name for name in dict.fromkeys(seeds) if name in available_objects]
+    if source_id in {"gauss_ecommerce", "dameng_ecommerce"}:
+        # Retail aggregates routinely need the order line and product/category
+        # chain.  Preserve it as one bounded group so the planner cannot name
+        # an otherwise valid table that policy later rejects as out of scope.
+        if any(term in question_lower for term in ("品牌", "销量", "gmv", "vip")):
+            seeds.extend(("customers", "orders", "order_items", "products", "categories", "dict_vip_level"))
+    if source_id == "hive_hadoop_demo" and any(term in question_lower for term in ("品牌", "销量", "gmv", "趋势")):
+        seeds.extend(("hadoop_order_events", "hadoop_product_dim"))
+    # Dameng metadata uses upper-case identifiers; resolve seed names without
+    # making policy case-insensitive for anything outside the retrieved schema.
+    # 构造"小写 → 真实名"对照表
+    # {
+    #   "police_alert":        "POLICE_ALERT",
+    #   "alert_involvement":   "ALERT_INVOLVEMENT",
+    #   "dict_alert_role":     "DICT_ALERT_ROLE",
+    #   "incident_record":     "INCIDENT_RECORD",
+    #   ...
+    # }
+    available_by_lower = {name.lower(): name for name in available_objects}
+    return [
+        available_by_lower[name.lower()]
+        for name in dict.fromkeys(seeds)
+        if name.lower() in available_by_lower
+    ]
 
 
 def configured_source_descriptors() -> list[SourceDescriptor]:
@@ -167,9 +206,11 @@ def discover_sources(
         # matched_terms = ["订单", "产品", "销售"]  # 三个词都匹配了
         matched_terms = sorted(term for term in terms if term in searchable)
         score = float(len(matched_terms) * 2)
+
         matched_bigrams = sorted(question_bigrams & extract_chinese_bigrams(searchable))
         score += float(min(len(matched_bigrams), 3))
         matched_terms.extend(bigram for bigram in matched_bigrams if bigram not in matched_terms)
+
         # 果问题中直接提到了数据源 ID，额外加 10 分。
         if descriptor.source_id.lower() in question_lower:
             score += 10.0
@@ -228,7 +269,23 @@ def discover_sources(
             # Service availability is not a reason to weaken the previous safe
             # retrieval path.  Observability is captured at graph level.
             pass
-    return sorted(ranked, key=lambda item: (-item.score, item.source_id))[:limit]
+    ordered = sorted(ranked, key=lambda item: (-item.score, item.source_id))
+    required_source_ids = {
+        source_id
+        for source_id, terms_for_source in SOURCE_REQUIRED_TERMS.items()
+        if any(term in question_lower for term in terms_for_source)
+    }
+    # Preserve explicit domain hits ahead of semantically similar but unrelated
+    # sources.  For example, “每个部门有多少员工” must retain sqlite_demo
+    # even when an ecommerce metadata vector happens to score higher.
+    required = [item for item in ordered if item.source_id in required_source_ids]
+    remaining = [item for item in ordered if item.source_id not in required_source_ids]
+    # A single unambiguous domain is a routing decision, not merely a ranking
+    # hint.  Do not ask the planner to choose between SQLite employees and an
+    # unrelated ecommerce source for an employee/department question.
+    if len(required) == 1:
+        return required
+    return (required + remaining)[:limit]
 
 
 def retrieve_metadata_context(
@@ -255,8 +312,9 @@ def retrieve_metadata_context(
     # 获取该数据源的所有表、列、外键等元数据
     metadata = adapter.get_metadata()
     available_objects = {str(table.get("name")) for table in metadata.get("tables", []) if table.get("name")}
+    # 去重保序 过滤还原大小写
     required_seeds = _required_schema_seeds(question, source.source_id, available_objects)
-    # Deterministic selection is retained as a bounded fallback/reranker.
+    # 确定性选择被保留为有界回退/重排序器。
     lexical_selected = select_relevant_tables(
         question,
         metadata,

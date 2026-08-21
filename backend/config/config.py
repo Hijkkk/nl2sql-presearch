@@ -46,16 +46,19 @@ class Settings(BaseSettings):
     agent_enabled: bool = Field(default=False, alias="AGENT_ENABLED")
     agent_record_only: bool = Field(default=True, alias="AGENT_RECORD_ONLY")
     agent_source_candidate_limit: int = Field(default=3, alias="AGENT_SOURCE_CANDIDATE_LIMIT")
-    agent_schema_object_limit: int = Field(default=5, alias="AGENT_SCHEMA_OBJECT_LIMIT")
+    agent_schema_object_limit: int = Field(default=3, alias="AGENT_SCHEMA_OBJECT_LIMIT")
     agent_max_plan_revisions: int = Field(default=1, alias="AGENT_MAX_PLAN_REVISIONS")
     agent_planner_dashscope_enabled: bool = Field(default=True, alias="AGENT_PLANNER_DASHSCOPE_ENABLED")
-    agent_planner_model: str = Field(default="qwen3.7-flash", alias="AGENT_PLANNER_MODEL")
+    # The planner also powers the single allowed SQL repair.  Keep its default
+    # aligned with the currently supported high-reliability DashScope model;
+    # qwen3.7-flash has been retired from the available account quota.
+    agent_planner_model: str = Field(default="qwen3.7-max", alias="AGENT_PLANNER_MODEL")
     agent_planner_max_tokens: int = Field(default=800, alias="AGENT_PLANNER_MAX_TOKENS")
     agent_sql_model_id: str = Field(default="xiyan-sql-3b-finetune", alias="AGENT_SQL_MODEL_ID")
     agent_execute_timeout: float = Field(default=30.0, alias="AGENT_EXECUTE_TIMEOUT")
-    # Local XiYan Ollama context budgeting.  3000 + 256 + 800 = 4056 <= 4096.
-    agent_xiyan_context_window: int = Field(default=4096, alias="AGENT_XIYAN_CONTEXT_WINDOW")
-    agent_xiyan_prompt_token_budget: int = Field(default=3000, alias="AGENT_XIYAN_PROMPT_TOKEN_BUDGET")
+    # Local XiYan Ollama context budgeting.  6200 + 256 + 800 = 7256 <= 8192.
+    agent_xiyan_context_window: int = Field(default=8192, alias="AGENT_XIYAN_CONTEXT_WINDOW")
+    agent_xiyan_prompt_token_budget: int = Field(default=6200, alias="AGENT_XIYAN_PROMPT_TOKEN_BUDGET")
     agent_xiyan_max_output_tokens: int = Field(default=256, alias="AGENT_XIYAN_MAX_OUTPUT_TOKENS")
     agent_xiyan_safety_margin_tokens: int = Field(default=800, alias="AGENT_XIYAN_SAFETY_MARGIN_TOKENS")
     # Semantic retrieval is intentionally independent from planning and execution.
@@ -67,14 +70,6 @@ class Settings(BaseSettings):
     agent_embedding_dimensions: int = Field(default=1024, alias="AGENT_EMBEDDING_DIMENSIONS")
     agent_embedding_timeout: float = Field(default=15.0, alias="AGENT_EMBEDDING_TIMEOUT")
 
-    # DeepSeek 独立审核：默认关闭，只有显式配置 Key 并启用后才会出网调用。
-    deepseek_reviewer_enabled: bool = Field(default=False, alias="DEEPSEEK_REVIEWER_ENABLED")
-    deepseek_base_url: str = Field(default="https://api.deepseek.com", alias="DEEPSEEK_BASE_URL")
-    deepseek_api_key: str = Field(default="", alias="DEEPSEEK_API_KEY")
-    deepseek_model: str = Field(default="deepseek-v4-flash", alias="DEEPSEEK_MODEL")
-    deepseek_timeout: float = Field(default=30.0, alias="DEEPSEEK_TIMEOUT")
-    deepseek_reviewer_retries: int = Field(default=1, alias="DEEPSEEK_REVIEWER_RETRIES")
-
     # ==================== 阿里云 DashScope 配置（备用） ====================
     dashscope_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     dashscope_api_key: str = Field(default="", alias="DASHSCOPE_API_KEY")
@@ -84,11 +79,23 @@ class Settings(BaseSettings):
     # 不再占用 XiYanSQL 这个专用 Text-to-SQL 模型。
     result_summary_dashscope_enabled: bool = Field(default=True, alias="RESULT_SUMMARY_DASHSCOPE_ENABLED")
     result_summary_model: str = Field(
-        default="qwen3.7-flash",
+        default="qwen3.7-max",
         alias="RESULT_SUMMARY_MODEL",
     )
     result_summary_max_tokens: int = Field(default=96, alias="RESULT_SUMMARY_MAX_TOKENS")
     result_summary_enable_thinking: bool = Field(default=False, alias="RESULT_SUMMARY_ENABLE_THINKING")
+
+    @property
+    def agent_planner_effective_model(self) -> str:
+        """Keep existing local environments working after Flash entitlement expiry."""
+        model = self.agent_planner_model.strip()
+        return "qwen3.7-max" if model == "qwen3.7-flash" else model
+
+    @property
+    def result_summary_effective_model(self) -> str:
+        """Use the supported model when an older local config still names Flash."""
+        model = self.result_summary_model.strip()
+        return "qwen3.7-max" if model == "qwen3.7-flash" else model
 
 
     # ==================== 本地 XiYanSQL 3B 配置（≤7B 课题约束） ====================
@@ -111,7 +118,7 @@ class Settings(BaseSettings):
     xiyan_finetune_enabled: bool = Field(default=True, alias="XIYAN_FINETUNE_ENABLED")
     xiyan_finetune_base_url: str = Field(default="http://127.0.0.1:8010/v1", alias="XIYAN_FINETUNE_BASE_URL")
     xiyan_finetune_api_key: str = Field(default="", alias="XIYAN_FINETUNE_API_KEY")
-    xiyan_finetune_model: str = Field(default="XiYanSQL-QwenCoder-3B-2504", alias="XIYAN_FINETUNE_MODEL")
+    xiyan_finetune_model: str = Field(default="XiYanSQL 3B LoRA Q4_K_M", alias="XIYAN_FINETUNE_MODEL")
     xiyan_finetune_model_path: str = Field(
         default=r"Z:\python\Projects\task\datasources\XiYanSQL-QwenCoder-3b\XiYanSQL-QwenCoder-3B-2504",
         alias="XIYAN_FINETUNE_MODEL_PATH",

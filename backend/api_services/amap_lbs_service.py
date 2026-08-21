@@ -46,18 +46,26 @@ class AmapLBSService:
     def can_handle(self, question: str) -> bool:
         if not self.api_key:
             return False
-        keywords = [
+        normalized = question.lower()
+        # Do not use generic words such as “查询”, “现在”, or the raw substring
+        # “ip”: the latter occurs inside business terms like “VIP”.  A fixed
+        # map adapter is allowed only for an unmistakable LBS intent.
+        direct_intents = (
             "天气", "温度", "湿度", "下雨", "晴",
             "距离", "多远", "路径", "路线", "驾车", "步行", "骑行",
             "行政区", "行政区域", "区划", "adcode",
-            "经纬度", "地理编码", "地址", "逆地理",
-            "附近", "周边", "搜索", "查询", "定位", "ip",
-            "现在", "当前位置", "当前城市", "哪个城市", "在哪", "大概在哪", "所在城市",
-        ]
-        # 用户问："北京天气怎么样" → 包含"天气" → True
-        # 用户问："查询销售额" → 不包含任何关键词 → False
-        # any() 是 Python 内置函数，只要 iterable 中有一个元素为 True，就返回 True，否则返回 False。
-        return any(keyword in question.lower() for keyword in keywords)
+            "经纬度", "地理编码", "逆地理",
+            "当前位置", "当前城市", "哪个城市", "大概在哪", "所在城市",
+            "ip定位", "ip 地址", "ip地址",
+        )
+        if any(intent in normalized for intent in direct_intents):
+            return True
+
+        # POI lookup needs both an action and a place-search cue.  “搜索北京
+        # 咖啡店” is accepted, while “查询 VIP 客户” remains a database query.
+        search_actions = ("搜索", "搜一下", "查找")
+        place_cues = ("附近", "周边", "咖啡", "餐厅", "酒店", "景点", "医院", "地铁", "地址")
+        return any(action in normalized for action in search_actions) and any(cue in normalized for cue in place_cues)
 
     def resolve_city_from_client_location(self, client_location: Optional[Dict[str, Any]]) -> Dict[str, str]:
         """Resolve browser coordinates to the city format used by business tables.
@@ -103,7 +111,18 @@ class AmapLBSService:
         处理用户问题，返回 ChatResponse。
         :param question: 用户问题
         :param client_location: 用户当前地址，用于位置相关查询
-        :return: ChatResponse
+        :return:
+                ChatResponse(
+                    success=True,                    # 是否成功
+                    question=question,               # 用户原始问题
+                    sql=f"GET {service['endpoint']}",  # 调用的 API 端点
+                    results=rows,                    # 查询结果（列表套字典）
+                    columns=columns,                 # 列名列表
+                    row_count=len(rows),             # 返回行数
+                    execution_time=0.12,             # 执行耗时（秒）
+                    llm_thought="已识别为高德地图 天气查询 服务调用。",  # 思考过程
+                    insight="北京当前天气为多云，温度 28℃。",  # 自然语言总结
+                )
         """
         start = time.time()
 
@@ -812,6 +831,24 @@ class AmapLBSService:
         return columns
 
     def _build_insight(self, service_name: str, rows: List[Dict[str, Any]]) -> str:
+        if service_name == "地理编码" and rows:
+            row = rows[0]
+            address = str(row.get("formatted_address") or row.get("address") or "目标地点")
+            location = str(row.get("location") or "")
+            if location:
+                longitude, separator, latitude = location.partition(",")
+                if separator and longitude and latitude:
+                    return f"{address} 的经度为 {longitude}，纬度为 {latitude}。"
+                return f"{address} 的坐标为 {location}。"
+        if service_name in {"关键字搜索", "周边搜索", "当前位置周边搜索"} and rows:
+            places = []
+            for row in rows[:3]:
+                name = str(row.get("name") or "")
+                address = str(row.get("address") or row.get("adname") or "")
+                if name:
+                    places.append(f"{name}（{address}）" if address else name)
+            if places:
+                return f"已找到 {len(rows)} 个地点，优先推荐：{'；'.join(places)}。"
         if service_name in {"天气查询", "当前位置天气查询"} and rows:
             row = rows[0]
             city = row.get("city") or row.get("query_city") or "目标城市"

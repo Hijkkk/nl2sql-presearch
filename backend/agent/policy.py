@@ -36,7 +36,11 @@ def validate_plan(
     :param plan: Agent 提交的执行计划
     :param contexts: 各数据源的元数据上下文
     :param supported_merge_contracts: 自定义支持的融合契约（可选）
-    :return: PlanValidationResult：验证结果（approved/revise/rejected）
+    :return:
+        1	任务 ID 重复	❌ 拒绝	DUPLICATE_TASK_ID
+        2	单源模式任务数量	❌ 拒绝	SINGLE_SOURCE_TASK_COUNT
+        3	数据源授权	❌ 拒绝	UNAUTHORIZED_SOURCE:xxx
+        4	操作类型匹配	❌ 拒绝	OPERATION_NOT_ALLOWED:task_1
     """
     # 把 contexts 列表转成字典，方便通过 source_id 快速查找。
     context_by_source = {context.source.source_id: context for context in contexts}
@@ -107,6 +111,7 @@ def validate_plan(
             for output_field in task.output_fields
             for reference in _qualified_field_references(output_field)
             if reference not in available_fields
+            and not _is_valid_self_join_alias_reference(reference, task.object_ids, context.tables, available_fields)
         })
         if unknown_fields:
             revision_needed.append(f"FIELD_OUTSIDE_SCHEMA_CLOSURE:{task.id}")
@@ -163,3 +168,33 @@ def _qualified_field_references(output_field: str) -> set[str]:
         f"{table}.{field}"
         for table, field in re.findall(r"\b([A-Za-z_][\w$]*)\.([A-Za-z_][\w$]*)\b", output_field)
     }
+
+
+def _is_valid_self_join_alias_reference(
+    reference: str,
+    object_ids: list[str],
+    tables: list[dict],
+    available_fields: set[str],
+) -> bool:
+    """Allow ``manager.name``-style aliases for one selected self-joined table.
+
+    The plan names physical objects, while a self join necessarily introduces a
+    second SQL alias.  Accept that alias only when the selected physical table
+    has a verified foreign key back to itself and owns the referenced column.
+    SQL scope validation still checks the generated SQL aliases before execute.
+    """
+    if "." not in reference or len(set(object_ids)) != 1:
+        return False
+    _alias, column = reference.split(".", 1)
+    table_name = object_ids[0]
+    if f"{table_name}.{column}" not in available_fields:
+        return False
+    table = next((item for item in tables if item.get("name") == table_name), None)
+    if not table:
+        return False
+    return any(
+        foreign_key.get("ref_table") == table_name
+        and foreign_key.get("column")
+        and foreign_key.get("ref_column")
+        for foreign_key in (table.get("foreign_keys") or [])
+    )

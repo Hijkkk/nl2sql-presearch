@@ -108,6 +108,7 @@ class ConversationMessageOut(BaseModel):
     insight: Optional[str] = None
     success: Optional[bool] = None
     error: Optional[str] = None
+    agent_data: Optional[dict[str, Any]] = None
     created_at: datetime
 
 

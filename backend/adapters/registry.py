@@ -41,6 +41,14 @@ ADAPTERS: dict[str, BaseDataSourceAdapter] = {}
 
 
 def get_adapter(data_source: str) -> BaseDataSourceAdapter:
+    """
+    返回相应数据源适配器的实例
+    缓存适配器对象到全局字典 ADAPTERS
+    :param data_source:
+    :return:
+        mysql_prod	MySQLAdapter
+        MySQLAdapter(name="mysql_prod", host="...", port=3306, ...)
+    """
     if data_source not in ADAPTERS:
         if data_source == "sqlite_demo":
             ADAPTERS[data_source] = SQLiteAdapter(

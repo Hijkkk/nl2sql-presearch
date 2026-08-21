@@ -29,6 +29,26 @@ def get_source_catalog(data_source: str) -> Dict[str, Any]:
     #     # police_address 的配置
     #   rest_api_demo:
     #     # rest_api_demo 的配置
+    # {
+    #   "version": "2.0",
+    #   "generated_date": "2026-07-28",
+    #   "sources": {
+    #     "countries_graphql": {
+    #       "dialect": "MySQL",
+    #       "preferred_objects": [
+    #         "v_country_profile",
+    #         "countries",
+    #         "country_currencies",
+    #         "country_languages",
+    #         "dict_continent"
+    #       ],
+    #       "default_time_field": null,
+    #       "synonyms": {
+    #         "国家": [
+    #           "countries",
+    #           "v_country_profile"
+    #         ],
+    #     },
     sources = load_catalog().get("sources", {})
     # 尝试从 sources 中找到 data_source 对应的配置
     # 如果没找到，返回空字典
@@ -47,6 +67,15 @@ def get_source_catalog(data_source: str) -> Dict[str, Any]:
 
 
 def preferred_objects_for(data_source: str, available_names: Iterable[str]) -> List[str]:
+    """
+
+    :param data_source:
+    :param available_names:
+    {
+       "employees":{"name": "employees", "comment": "员工信息表，包含自关联经理关系", "columns": [...]},
+    }
+    :return:
+    """
     catalog = get_source_catalog(data_source)
     available_lookup = {str(name).lower(): str(name) for name in available_names}
     result: List[str] = []
@@ -87,6 +116,9 @@ def catalog_prompt_hint(data_source: str, available_names: Iterable[str]) -> str
 
 
 def load_catalog() -> Dict[str, Any]:
+    """
+    :return:
+    """
     # 使用了 global 变量实现缓存
     # _CACHE_PATH = ""      # 缓存的文件路径
     # _CACHE_MTIME = 0.0    # 缓存的文件修改时间

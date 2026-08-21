@@ -68,7 +68,7 @@ def test_result_summary_uses_configured_dashscope_flash_when_key_is_available(mo
     )
 
     assert base_url == "https://dashscope.example/v1"
-    assert model == "qwen3.7-flash"
+    assert model == "qwen3.7-max"
     assert api_key == "test-key"
 
 
@@ -151,6 +151,14 @@ def test_ecommerce_uses_view_first_and_never_applies_view_city_field_to_customer
 
 def test_demo_patches_cover_police_stock_hadoop_and_translated_summary():
     generator = SQLGenerator()
+
+    manager_sql = generator._apply_source_sql_patches(
+        "SELECT e.name, e.manager_id FROM employees e",
+        "列出每位有直属经理的员工及其经理姓名。",
+        "sqlite_demo",
+    )
+    assert "JOIN employees m ON m.id = e.manager_id" in manager_sql
+    assert "m.name AS manager_name" in manager_sql
 
     police_sql = generator._apply_source_sql_patches(
         "SELECT 1", "2026 年 1 月东城区已结案的治安报警有多少起？", "mysql_police_address"

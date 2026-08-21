@@ -2,6 +2,7 @@
 import sqlite3
 import json
 from datetime import date, datetime
+from dataclasses import dataclass, field
 from typing import Any, Optional
 from loguru import logger
 from backend.config.config import settings
@@ -144,6 +145,90 @@ def prepare_result_sample(
     return columns or [], sample, len(rows) > len(sample)
 
 
+@dataclass(slots=True)
+class AuditRecord:
+    """聊天和受控代理执行共享的共同审计事实。
+    仅代理的图表详情保留在 ``agent_runs`` / ``agent_steps`` 和
+    JSON 跟踪中。此记录特意镜像了 ``audit_logs`` 中的列，
+    以便可以使用同一份报告或 SQL 语句查询这两个路径。
+    """
+
+    question: str
+    generated_sql: str
+    executed_sql: str
+    data_source: str
+    row_count: int
+    status: str
+    error_message: Optional[str] = None
+    execution_time: float = 0.0
+    user: str = "demo_user"
+    rag_enabled: bool = False
+    rag_hits: list[dict[str, Any]] = field(default_factory=list)
+    selected_tables: list[str] = field(default_factory=list)
+    query_guard_passed: Optional[bool] = None
+    prompt_token_estimate: Optional[int] = None
+    stage_timings: dict[str, float] = field(default_factory=dict)
+    model_id: Optional[str] = None
+    raw_model_output: Optional[str] = None
+    llm_thought: Optional[str] = None
+    prompt_template: Optional[str] = None
+    generation_cache_hit: Optional[bool] = None
+    correction_attempted: bool = False
+    corrected_sql: Optional[str] = None
+    result_columns: list[Any] = field(default_factory=list)
+    result_sample: list[dict[str, Any]] = field(default_factory=list)
+    result_truncated: bool = False
+
+
+def write_audit_record(record: AuditRecord) -> None:
+    """对于任何执行路径，保留一条规范化的审计记录。"""
+    try:
+        init_audit_db()
+        conn = sqlite3.connect(audit_db_path())
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO audit_logs
+            (timestamp, user, question, generated_sql, executed_sql, data_source,
+             row_count, status, error_message, execution_time, rag_enabled, rag_hits_json,
+             selected_tables_json, rag_top_score, query_guard_passed, prompt_token_estimate, stage_timings_json,
+             model_id, raw_model_output, llm_thought, prompt_template, generation_cache_hit, correction_attempted, corrected_sql,
+             result_columns_json, result_sample_json, result_truncated)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            datetime.now().isoformat(),
+            record.user,
+            record.question,
+            record.generated_sql,
+            record.executed_sql,
+            record.data_source,
+            record.row_count,
+            record.status,
+            record.error_message,
+            record.execution_time,
+            int(record.rag_enabled),
+            json.dumps(record.rag_hits, ensure_ascii=False),
+            json.dumps(record.selected_tables, ensure_ascii=False),
+            max((hit.get("score", 0) for hit in record.rag_hits), default=None),
+            None if record.query_guard_passed is None else int(record.query_guard_passed),
+            record.prompt_token_estimate,
+            json.dumps(record.stage_timings, ensure_ascii=False),
+            record.model_id,
+            record.raw_model_output,
+            record.llm_thought,
+            record.prompt_template,
+            None if record.generation_cache_hit is None else int(record.generation_cache_hit),
+            int(record.correction_attempted),
+            record.corrected_sql,
+            json.dumps(record.result_columns, ensure_ascii=False, default=str),
+            json.dumps(record.result_sample, ensure_ascii=False, default=str),
+            int(record.result_truncated),
+        ))
+        conn.commit()
+        conn.close()
+    except Exception as exc:
+        logger.error(f"Failed to write audit log: {exc}")
+
+
 def log_audit(
     question: str,
     generated_sql: str,
@@ -171,52 +256,99 @@ def log_audit(
     result_sample: Optional[list[dict[str, Any]]] = None,
     result_truncated: bool = False,
 ):
-    """写入一条审计日志"""
-    try:
-        init_audit_db()
-        conn = sqlite3.connect(audit_db_path())
-        cursor = conn.cursor()
-        cursor.execute("""
-            INSERT INTO audit_logs 
-            (timestamp, user, question, generated_sql, executed_sql, data_source, 
-             row_count, status, error_message, execution_time, rag_enabled, rag_hits_json,
-             selected_tables_json, rag_top_score, query_guard_passed, prompt_token_estimate, stage_timings_json,
-             model_id, raw_model_output, llm_thought, prompt_template, generation_cache_hit, correction_attempted, corrected_sql,
-             result_columns_json, result_sample_json, result_truncated)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            datetime.now().isoformat(),
-            user,
-            question,
-            generated_sql,
-            executed_sql,
-            data_source,
-            row_count,
-            status,
-            error_message,
-            execution_time,
-            int(rag_enabled),
-            json.dumps(rag_hits or [], ensure_ascii=False),
-            json.dumps(selected_tables or [], ensure_ascii=False),
-            max((hit.get("score", 0) for hit in (rag_hits or [])), default=None),
-            None if query_guard_passed is None else int(query_guard_passed),
-            prompt_token_estimate,
-            json.dumps(stage_timings or {}, ensure_ascii=False),
-            model_id,
-            raw_model_output,
-            llm_thought,
-            prompt_template,
-            None if generation_cache_hit is None else int(generation_cache_hit),
-            int(correction_attempted),
-            corrected_sql,
-            json.dumps(result_columns or [], ensure_ascii=False, default=str),
-            json.dumps(result_sample or [], ensure_ascii=False, default=str),
-            int(result_truncated),
-        ))
-        conn.commit()
-        conn.close()
-    except Exception as e:
-        logger.error(f"Failed to write audit log: {e}")
+    """Backward-compatible Chat facade over the shared audit writer."""
+    write_audit_record(AuditRecord(
+        question=question,
+        generated_sql=generated_sql,
+        executed_sql=executed_sql,
+        data_source=data_source,
+        row_count=row_count,
+        status=status,
+        error_message=error_message,
+        execution_time=execution_time,
+        user=user,
+        rag_enabled=rag_enabled,
+        rag_hits=rag_hits or [],
+        selected_tables=selected_tables or [],
+        query_guard_passed=query_guard_passed,
+        prompt_token_estimate=prompt_token_estimate,
+        stage_timings=stage_timings or {},
+        model_id=model_id,
+        raw_model_output=raw_model_output,
+        llm_thought=llm_thought,
+        prompt_template=prompt_template,
+        generation_cache_hit=generation_cache_hit,
+        correction_attempted=correction_attempted,
+        corrected_sql=corrected_sql,
+        result_columns=result_columns or [],
+        result_sample=result_sample or [],
+        result_truncated=result_truncated,
+    ))
+
+
+def _agent_query_guard_outcome(execution: dict[str, Any]) -> Optional[bool]:
+    """Return a precise QueryGuard result without claiming other checks are Guard failures."""
+    if execution.get("success"):
+        return True
+    error = str(execution.get("error") or "")
+    return False if "QUERY_GUARD" in error else None
+
+
+def _agent_audit_record(
+    *,
+    question: str,
+    final_plan: dict[str, Any],
+    execution: dict[str, Any],
+    execution_time: float,
+    stage_timings: dict[str, float],
+    model_id: Optional[str],
+    error_message: Optional[str],
+    contexts: list[dict[str, Any]],
+    candidates: list[dict[str, Any]],
+) -> AuditRecord:
+    task = (final_plan.get("subtasks") or [{}])[0]
+    source_id = str(task.get("source_id") or "")
+    context = next((item for item in contexts if (item.get("source") or {}).get("source_id") == source_id), {})
+    generation = execution.get("generation_trace") or {}
+    if not isinstance(generation, dict):
+        generation = {}
+    columns = execution.get("columns") or []
+    results = execution.get("results") or []
+    result_columns, result_sample, result_truncated = prepare_result_sample(columns, results)
+    rag_hits = [
+        {
+            "source_id": candidate.get("source_id"),
+            "score": candidate.get("hybrid_score")
+            if candidate.get("hybrid_score") is not None
+            else candidate.get("score", 0),
+        }
+        for candidate in candidates
+    ]
+    return AuditRecord(
+        question=question,
+        generated_sql=str(execution.get("sql") or ""),
+        executed_sql=str(execution.get("sql") or "") if execution.get("success") else "",
+        data_source=source_id,
+        row_count=int(execution.get("row_count") or 0),
+        status="success" if execution.get("success") else "blocked",
+        error_message=error_message or execution.get("error"),
+        execution_time=execution_time,
+        rag_enabled=bool(settings.agent_vector_enabled),
+        rag_hits=rag_hits,
+        selected_tables=list(context.get("schema_closure_object_ids") or task.get("object_ids") or []),
+        query_guard_passed=_agent_query_guard_outcome(execution),
+        prompt_token_estimate=generation.get("prompt_token_estimate"),
+        stage_timings=stage_timings,
+        model_id=model_id,
+        raw_model_output=generation.get("raw_model_output") or "[controlled_agent:no_sql_output]",
+        llm_thought=generation.get("llm_thought") or "[受控 Agent：详见 agent_runs / agent_steps]",
+        prompt_template=generation.get("prompt_template") or None,
+        generation_cache_hit=bool(generation.get("generation_cache_hit")),
+        correction_attempted=bool(execution.get("retry_attempted")),
+        result_columns=result_columns,
+        result_sample=result_sample,
+        result_truncated=result_truncated,
+    )
 
 
 def log_agent_trace(
@@ -228,8 +360,14 @@ def log_agent_trace(
     route_mode: Optional[str] = None,
     final_plan: Optional[dict[str, Any]] = None,
     error_message: Optional[str] = None,
+    execution: Optional[dict[str, Any]] = None,
+    execution_time: float = 0.0,
+    stage_timings: Optional[dict[str, float]] = None,
+    model_id: Optional[str] = None,
+    candidates: Optional[list[dict[str, Any]]] = None,
+    contexts: Optional[list[dict[str, Any]]] = None,
 ) -> None:
-    """Append a controlled-agent trace without modifying historical audit rows."""
+    """Persist Agent-specific detail plus the same normalized audit fact as Chat."""
     try:
         init_audit_db()
         conn = sqlite3.connect(audit_db_path())
@@ -267,6 +405,18 @@ def log_agent_trace(
         )
         conn.commit()
         conn.close()
+        execution_payload = execution or {}
+        write_audit_record(_agent_audit_record(
+            question=question,
+            final_plan=final_plan or {},
+            execution=execution_payload,
+            execution_time=execution_time,
+            stage_timings=stage_timings or {"total": execution_time},
+            model_id=model_id,
+            error_message=error_message,
+            contexts=contexts or [],
+            candidates=candidates or [],
+        ))
     except Exception as exc:
         logger.error(f"Failed to write controlled-agent audit trace: {exc}")
 
@@ -285,6 +435,7 @@ def write_agent_execution_trace(
     answer: Optional[str],
     events: list[dict[str, Any]],
     error: Optional[str],
+    stage_timings: Optional[dict[str, float]] = None,
 ) -> None:
     """Write a safe, inspectable JSON trace for one controlled-agent request.
 
@@ -297,12 +448,34 @@ def write_agent_execution_trace(
         created_at = datetime.now()
         directory = agent_trace_root_dir() / created_at.date().isoformat()
         directory.mkdir(parents=True, exist_ok=True)
+        # Keep the high-level decision record first. Retrieval metadata and the
+        # full XiYan prompt can be large, so put both at the end of the file
+        # where an operator can open them only when needed.
+        execution_summary = dict(execution or {})
+        xiyan_generation = _format_trace_generation(execution_summary.pop("generation_trace", None))
+        event_summaries: list[dict[str, Any]] = []
+        for event in events:
+            event_summary = dict(event)
+            if "generation" in event_summary:
+                event_summary["generation_recorded_in"] = "xiyan_sql_generation"
+                event_summary.pop("generation", None)
+            event_summaries.append(event_summary)
+
         payload = {
-            "trace_version": 2,
+            "trace_version": 4,
             "created_at": created_at.isoformat(),
             "request_id": request_id,
             "question": question,
             "status": status,
+            "plan": plan,
+            "validation": validation,
+            "review": review,
+            "execution": execution_summary,
+            "answer": answer,
+            "events": event_summaries,
+            "stage_timings_seconds": stage_timings or {},
+            "error": error,
+            "privacy": {"raw_result_rows_included": False, "credentials_included": False},
             "retrieval": {
                 "pipeline": {
                     "lexical_recall": "关键词与中文二元词召回，作为确定性回退和混合重排基础。",
@@ -326,14 +499,7 @@ def write_agent_execution_trace(
                 "candidates": candidates,
                 "schema_contexts": contexts,
             },
-            "plan": plan,
-            "validation": validation,
-            "review": review,
-            "execution": execution,
-            "answer": answer,
-            "events": events,
-            "error": error,
-            "privacy": {"raw_result_rows_included": False, "credentials_included": False},
+            "xiyan_sql_generation": xiyan_generation,
         }
         # Timestamp-first names are easy to inspect chronologically. Microseconds
         # keep one trace file per concurrent request; request_id stays in JSON.
@@ -344,3 +510,30 @@ def write_agent_execution_trace(
         temporary.replace(path)
     except Exception as exc:
         logger.error(f"Failed to write controlled-agent execution trace: {exc}")
+
+
+def _format_trace_generation(generation: Any) -> Any:
+    """Make the large XiYan prompt readable in JSON without changing audit text.
+
+    JSON cannot contain literal line breaks in a string value.  Persisting the
+    prompt as a line array keeps the trace valid JSON and makes it readable in
+    editors, while SQLite ``audit_logs.prompt_template`` retains the original
+    text for existing tools and SQL consumers.
+    """
+    if not isinstance(generation, dict):
+        return generation
+    formatted = dict(generation)
+    prompt = formatted.get("prompt_template")
+    if isinstance(prompt, str):
+        formatted["prompt_template"] = prompt.splitlines()
+        formatted["prompt_template_format"] = "lines"
+    return formatted
+
+
+def prompt_template_to_text(prompt_template: Any) -> str | None:
+    """Read either the legacy prompt string or the formatted Agent-trace value."""
+    if isinstance(prompt_template, str):
+        return prompt_template
+    if isinstance(prompt_template, list) and all(isinstance(line, str) for line in prompt_template):
+        return "\n".join(prompt_template)
+    return None

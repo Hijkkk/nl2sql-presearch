@@ -2,7 +2,7 @@ from backend.agent.contracts import SourceDescriptor
 from backend.agent.tools import discover_sources, retrieve_metadata_context
 
 
-def test_discover_sources_only_returns_authorized_sources_in_score_order():
+def test_discover_sources_uses_the_single_explicit_domain_source():
     sources = [
         SourceDescriptor(source_id="mysql_police_address", source_type="mysql", dialect="mysql", description="警情、人员和地址数据"),
         SourceDescriptor(source_id="postgres_stock", source_type="postgresql", dialect="postgres", description="股票行情数据"),
@@ -10,8 +10,7 @@ def test_discover_sources_only_returns_authorized_sources_in_score_order():
 
     candidates = discover_sources("统计本月警情数量", allowed_sources=sources)
 
-    assert [candidate.source_id for candidate in candidates] == ["mysql_police_address", "postgres_stock"]
-    assert candidates[0].score > candidates[1].score
+    assert [candidate.source_id for candidate in candidates] == ["mysql_police_address"]
 
 
 def test_discover_sources_matches_chinese_business_terms_by_bigrams():
@@ -24,6 +23,26 @@ def test_discover_sources_matches_chinese_business_terms_by_bigrams():
 
     assert candidates[0].source_id == "sqlite_demo"
     assert candidates[0].score > 0
+
+
+def test_discover_sources_preserves_explicit_sqlite_domain_over_higher_semantic_score(monkeypatch):
+    sources = [
+        SourceDescriptor(source_id="sqlite_demo", source_type="sqlite", dialect="sqlite", description="员工、部门和销售数据"),
+        SourceDescriptor(source_id="gauss_ecommerce", source_type="gauss", dialect="postgres", description="电商数据"),
+    ]
+
+    class FakeStore:
+        def search(self, *_args, **_kwargs):
+            return [
+                {"source_id": "gauss_ecommerce", "vector_score": 0.99},
+                {"source_id": "sqlite_demo", "vector_score": 0.01},
+            ]
+
+    monkeypatch.setattr("backend.agent.tools.create_metadata_store", lambda: FakeStore())
+
+    candidates = discover_sources("统计每个部门分别有多少名员工", allowed_sources=sources, limit=3)
+
+    assert [candidate.source_id for candidate in candidates] == ["sqlite_demo"]
 
 
 def test_retrieve_metadata_context_returns_relationship_complete_bounded_schema():

@@ -70,7 +70,9 @@ class MySQLAdapter(BaseDataSourceAdapter):
 
     def metadata_cache_status(self) -> Dict[str, Any]:
         now = time.time()
+        # 计算缓存已存在时间
         age_seconds = max(0.0, now - self._metadata_cache_at) if self._metadata_cache else None
+        # 计算剩余有效期
         expires_in_seconds = (
             max(0.0, self._metadata_cache_ttl_seconds - age_seconds)
             if age_seconds is not None
@@ -89,15 +91,21 @@ class MySQLAdapter(BaseDataSourceAdapter):
         }
 
     def get_metadata(self) -> Dict[str, Any]:
-        """获取 MySQL 元数据（表、字段、外键、注释）"""
+        """
+        获取缓存签名 -> 检查是否有缓存，是否超时，数据是否发生变化 -> 如果没直接返回缓存
+                                                        -> 否则重新构建元数据 -> 写入缓存
+        :return:
+        """
         conn = self._get_connection()
         now = time.time()
+
         signature = self._get_schema_signature(conn)
         if (
             self._metadata_cache is not None
             and self._metadata_cache_signature == signature
             and now - self._metadata_cache_at <= self._metadata_cache_ttl_seconds
         ):
+            # 有缓存，且缓存为超时，未变化
             return self._metadata_cache
         cursor = conn.cursor()
 
@@ -201,12 +209,25 @@ class MySQLAdapter(BaseDataSourceAdapter):
             "schema_signature": signature,
             "schema": self.database,
         }
+
+        # 写缓存
         self._metadata_cache = metadata
         self._metadata_cache_signature = signature
         self._metadata_cache_at = now
         return metadata
 
     def _get_schema_signature(self, conn) -> str:
+        """
+        生成一个唯一的字符串签名，代表当前数据库的完整结构。
+        如果数据库结构发生变化（增删表、修改字段、改注释等），签名就会改变，从而触发缓存失效。
+        :param conn:
+        :return:
+            employees|id|int|NO|None|PRI|员工ID
+            employees|name|varchar(100)|YES|None||姓名
+            employees|dept_id|int|YES|None|MUL|部门ID
+            departments|id|int|NO|None|PRI|部门ID
+            departments|name|varchar(50)|YES|None||部门名称
+        """
         cursor = conn.cursor()
         try:
             cursor.execute("""

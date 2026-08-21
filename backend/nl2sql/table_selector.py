@@ -1,7 +1,6 @@
 """
 简单表相关性选择器
 根据用户问题中的关键词，筛选最相关的表，减少 Prompt 长度
-（后续可升级为 embedding + 向量检索）
 """
 from typing import Dict, List, Any
 import re
@@ -17,11 +16,21 @@ except ImportError:  # pragma: no cover - 兼容未安装 jieba 的最小运行�
 
 
 def tokenize_question(question: str) -> List[str]:
-    """将问题拆成可用于匹配的关键词，jieba 不可用时使用保守降级策略。"""
+    """
+    将问题拆成可用于匹配的关键词，jieba 不可用时使用保守降级策略。
+    :param question:
+    :return: ['查询', '北京', '地区', '销售', '总额']
+    """
     question = question.lower()
+    # 2. 有 jieba 就用智能分词
     if jieba:
+        # 只保留长度>1的词
+        # "的"、"了"、"是"、"在" 这些单字停用词被过滤
+        # 减少噪音，提高匹配准确率
         return [word for word in jieba.lcut(question) if len(word) > 1]
-
+    # 3. 没有 jieba 就用正则降级方案
+    # 滑动窗口取2字片段，可能有重复
+    # @todo
     ascii_words = re.findall(r"[a-zA-Z0-9_]+", question)
     chinese_chunks = re.findall(r"[\u4e00-\u9fff]{2,}", question)
     return ascii_words + chinese_chunks
@@ -66,6 +75,7 @@ def select_relevant_tables(
     # 问题小写化 "查询IT部门".lower()   →  "查询it部门"
     question_lower = question.lower()
     table_lookup = {table["name"]: table for table in tables}
+
     catalog = get_source_catalog(data_source)
     preferred_objects = preferred_objects_for(data_source, table_lookup)
     # 把问题拆成有意义的词，长度大于一的词

@@ -126,6 +126,27 @@ class RESTAPIAdapter(BaseDataSourceAdapter):
         # REST API 本身没有 SQL 方言；这里返回 sqlite，是因为后端用内存表执行只读 SELECT。
         return "sqlite"
 
+    def can_handle_controlled_question(self, question: str) -> bool:
+        """Whether this configured adapter owns a fixed, non-SQL API intent.
+
+        The decision stays at the REST adapter boundary.  The router does not
+        choose third-party URLs or issue requests itself, and no LLM receives
+        API credentials or arbitrary HTTP capability.
+        """
+        from backend.api_services.amap_lbs_service import AmapLBSService
+
+        return AmapLBSService().can_handle(question)
+
+    def execute_controlled_question(
+        self,
+        question: str,
+        client_location: Optional[Dict[str, Any]] = None,
+    ):
+        """Run the adapter-owned fixed AMap operation for an Agent request."""
+        from backend.api_services.amap_lbs_service import AmapLBSService
+
+        return AmapLBSService().answer(question, client_location)
+
     # 发一次请求测试 API 是否可用。成功就返回，失败就抛异常。
     def ping(self) -> None:
         self._request_json()

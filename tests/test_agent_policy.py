@@ -67,6 +67,29 @@ def test_policy_allows_an_aggregate_over_an_approved_field():
     assert validate_plan(plan, [_context()]).status == "approved"
 
 
+def test_policy_allows_a_second_alias_for_a_verified_self_join():
+    context = MetadataContext(
+        source=SourceDescriptor(source_id="sqlite_demo", source_type="sqlite", dialect="sqlite", description="员工数据"),
+        selected_object_ids=["employees"],
+        schema_closure_object_ids=["employees"],
+        tables=[{
+            "name": "employees",
+            "columns": [{"name": "id"}, {"name": "name"}, {"name": "manager_id"}],
+            "foreign_keys": [{"column": "manager_id", "ref_table": "employees", "ref_column": "id"}],
+        }],
+    )
+    plan = AgentPlan.model_validate({
+        "route_mode": "single_source", "confidence": 0.95,
+        "subtasks": [{
+            "id": "list_employees_with_managers", "source_id": "sqlite_demo", "operation_id": "readonly_sql",
+            "goal": "列出每位有直属经理的员工及其经理姓名", "object_ids": ["employees"],
+            "output_fields": ["employees.name", "managers.name"],
+        }],
+    })
+
+    assert validate_plan(plan, [context]).status == "approved"
+
+
 def test_policy_allows_one_revision_when_a_multi_source_merge_contract_is_missing():
     plan = AgentPlan.model_validate({
         "route_mode": "multi_source", "confidence": 0.8,

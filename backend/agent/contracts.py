@@ -56,7 +56,7 @@ class XiYanPromptContext(BaseModel):
     task_goal: str = Field(default="", max_length=500)
     required_object_ids: list[str] = Field(default_factory=list)
     planned_output_fields: list[str] = Field(default_factory=list)
-    schema_closure_object_ids: list[str] = Field(min_length=1, max_length=5)  # 表名列表（1-5个）
+    schema_closure_object_ids: list[str] = Field(min_length=1, max_length=3)  # 表名列表（1-3个）
     allowed_field_ids: list[str] = Field(default_factory=list)  # 允许的字段
     max_rows: int = Field(default=1000, ge=1, le=10000)  # 最大行数（1-10000）
 
@@ -79,16 +79,19 @@ class AgentPlan(BaseModel):
     subtasks: list[AgentSubtask] = Field(min_length=1, max_length=5)
     merge_contract_id: str | None = None
     confidence: float = Field(ge=0.0, le=1.0)
+    revision_summary_zh: str = Field(default="", max_length=200)
 
 
 class PlanValidationResult(BaseModel):
     status: Literal["approved", "revise", "rejected"]
     reason_codes: list[str] = Field(default_factory=list)
+    reason_summary_zh: str = Field(default="", max_length=300)
 
 
 class ReviewerDecision(BaseModel):
     decision: Literal["approve", "revise", "reject"]
     reason_codes: list[str] = Field(default_factory=list)
+    reason_summary_zh: str = Field(default="", max_length=300)
 
 
 class SqlRepairProposal(BaseModel):
@@ -111,3 +114,10 @@ class AgentExecutionResult(BaseModel):
     row_count: int = 0
     retry_attempted: bool = False
     error: str | None = None
+    # Server-side generation evidence for the trace; never contains credentials
+    # or result rows.
+    generation_trace: dict = Field(default_factory=dict)
+    # Records bounded server-side repair decisions without exposing credentials
+    # or raw database rows.  This is separate from the XiYan generation trace so
+    # operators can distinguish the original candidate from the final SQL.
+    repair_trace: dict = Field(default_factory=dict)

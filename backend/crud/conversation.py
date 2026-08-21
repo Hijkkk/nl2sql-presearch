@@ -1,5 +1,6 @@
 """Async CRUD functions for conversation history."""
 from datetime import datetime, timedelta
+import json
 from typing import Optional
 from uuid import uuid4
 
@@ -16,6 +17,92 @@ from backend.models.conversation import (
     ConversationMessageOut,
     ConversationSummary,
 )
+
+
+_AGENT_PRESENTATION_PREFIX = "__NL2SQL_AGENT_PRESENTATION__:"
+_AGENT_HISTORY_MAX_BYTES = 48 * 1024
+_AGENT_TRACE_ONLY_KEYS = frozenset({
+    # These fields are intentionally retained in data/agent_traces only.  They
+    # can include a full prompt plus the raw model response and easily exceed
+    # MySQL TEXT's 64 KiB limit when embedded in a conversation message.
+    "generation",
+    "generation_trace",
+    "prompt_template",
+    "raw_model_output",
+})
+
+
+def _history_safe_agent_presentation(presentation: dict) -> dict:
+    """Return the compact Agent payload used by durable chat history.
+
+    The trace JSON is the audit source of truth.  Conversation history only
+    needs enough information to restore the Agent cards in the UI, so it must
+    never contain the full generated prompt or raw LLM output.
+    """
+    def compact(value):
+        if isinstance(value, dict):
+            result = {}
+            for key, item in value.items():
+                if key in _AGENT_TRACE_ONLY_KEYS:
+                    result[key] = "[仅保存在 Agent JSON 审计轨迹中]"
+                else:
+                    result[key] = compact(item)
+            return result
+        if isinstance(value, list):
+            return [compact(item) for item in value]
+        return value
+
+    compacted = compact(presentation)
+    encoded = json.dumps(compacted, ensure_ascii=False, separators=(",", ":"))
+    if len(encoded.encode("utf-8")) <= _AGENT_HISTORY_MAX_BYTES:
+        return compacted
+
+    # A pathological retrieve/plan result can still be large.  Preserve the
+    # final decision and timings, but reduce event details rather than risking
+    # a failed user request merely because history is verbose.
+    events = compacted.get("events")
+    if isinstance(events, list):
+        compacted["events"] = [
+            {
+                key: event.get(key)
+                for key in ("node", "status", "reason", "duration_ms")
+                if key in event
+            }
+            for event in events
+            if isinstance(event, dict)
+        ]
+        compacted["history_details_compacted"] = True
+    encoded = json.dumps(compacted, ensure_ascii=False, separators=(",", ":"))
+    if len(encoded.encode("utf-8")) <= _AGENT_HISTORY_MAX_BYTES:
+        return compacted
+
+    # Last-resort guarantee for unusually large plans/schemas.  A history
+    # write must never turn an otherwise successful query into HTTP 500.
+    execution = compacted.get("execution")
+    return {
+        "is_agent": True,
+        "status": compacted.get("status"),
+        "execution": {
+            key: execution.get(key)
+            for key in ("success", "row_count", "retry_attempted", "error")
+            if isinstance(execution, dict) and key in execution
+        },
+        "error": compacted.get("error"),
+        "execution_time": compacted.get("execution_time"),
+        "stage_timings": compacted.get("stage_timings", {}),
+        "history_details_compacted": True,
+        "trace_hint": "完整计划、审核和 Prompt 请查看 Agent JSON 审计轨迹。",
+    }
+
+
+def _decode_agent_presentation(value: str | None) -> dict | None:
+    if not value or not value.startswith(_AGENT_PRESENTATION_PREFIX):
+        return None
+    try:
+        decoded = json.loads(value[len(_AGENT_PRESENTATION_PREFIX):])
+    except (TypeError, ValueError):
+        return None
+    return decoded if isinstance(decoded, dict) else None
 
 
 def _new_id(prefix: str) -> str:
@@ -36,6 +123,7 @@ def to_summary(conversation: Conversation) -> ConversationSummary:
 
 def to_message_out(message: ConversationMessage) -> ConversationMessageOut:
     show_debug = settings.nl2sql_debug_output
+    agent_data = _decode_agent_presentation(message.insight)
     return ConversationMessageOut(
         id=message.id,
         role=message.role,
@@ -47,9 +135,10 @@ def to_message_out(message: ConversationMessage) -> ConversationMessageOut:
         # 耗时属于请求状态，不是 SQL / 模型解释等调试内容。历史会话必须始终返回它，
         # 否则 NL2SQL_DEBUG_OUTPUT=false 时前端重新打开会话会显示“耗时：-”。
         execution_time=message.execution_time,
-        insight=message.insight if show_debug else None,
+        insight=message.insight if show_debug and not agent_data else None,
         success=message.success,
         error=message.error_message if show_debug else None,
+        agent_data=agent_data,
         created_at=message.created_at,
     )
 
@@ -297,8 +386,14 @@ async def save_chat_exchange(
     insight: Optional[str],
     success: bool,
     error: Optional[str],
+    presentation: Optional[dict] = None,
 ) -> tuple[str, str]:
     """Persist one user question and one AI answer into conversation history."""
+    history_presentation = (
+        _history_safe_agent_presentation(presentation)
+        if presentation is not None
+        else None
+    )
     conversation: Optional[Conversation] = None
     if conversation_id:
         stmt = select(Conversation).where(
@@ -339,7 +434,11 @@ async def save_chat_exchange(
         results_json=results,
         row_count=row_count,
         execution_time=execution_time,
-        insight=insight,
+        insight=(
+            _AGENT_PRESENTATION_PREFIX + json.dumps(history_presentation, ensure_ascii=False, separators=(",", ":"))
+            if history_presentation is not None
+            else insight
+        ),
         success=success,
         error_message=error,
         created_at=datetime.now() + timedelta(microseconds=1),

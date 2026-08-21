@@ -1,22 +1,31 @@
-from backend.agent.contracts import SourceCandidate
+from backend.agent.contracts import MetadataContext, SourceCandidate, SourceDescriptor
 from backend.agent.service import AgentPreparationService
 
 
-def test_agent_preparation_does_not_read_metadata_for_zero_score_candidates(monkeypatch):
-    candidates = [
-        SourceCandidate(source_id="mysql_police_address", source_type="mysql", dialect="mysql", description="警情", score=4),
-        SourceCandidate(source_id="postgres_stock", source_type="postgresql", dialect="postgres", description="股票", score=0),
-    ]
-    read_sources = []
-
-    monkeypatch.setattr("backend.agent.service.discover_sources", lambda question, limit: candidates)
-    monkeypatch.setattr(
-        "backend.agent.service.retrieve_metadata_context",
-        lambda question, candidate, object_limit: read_sources.append((candidate.source_id, object_limit)) or {"source": candidate.source_id},
+def test_prepare_skips_an_unavailable_candidate_without_blocking_sqlite(monkeypatch):
+    sqlite = SourceCandidate(
+        source_id="sqlite_demo", source_type="sqlite", dialect="sqlite", description="员工部门", score=10.0
+    )
+    dameng = SourceCandidate(
+        source_id="dameng_ecommerce", source_type="dameng", dialect="oracle", description="电商", score=2.0
+    )
+    sqlite_context = MetadataContext(
+        source=SourceDescriptor(source_id="sqlite_demo", source_type="sqlite", dialect="sqlite", description="员工部门"),
+        selected_object_ids=["departments"],
+        schema_closure_object_ids=["departments"],
+        tables=[{"name": "departments", "columns": [{"name": "id"}]}],
     )
 
-    result_candidates, contexts = AgentPreparationService().prepare("统计警情")
+    monkeypatch.setattr("backend.agent.service.discover_sources", lambda *_args, **_kwargs: [sqlite, dameng])
 
-    assert result_candidates == candidates
-    assert contexts == [{"source": "mysql_police_address"}]
-    assert read_sources == [("mysql_police_address", 5)]
+    def retrieve(_question, candidate, **_kwargs):
+        if candidate.source_id == "dameng_ecommerce":
+            raise RuntimeError("Dameng JVM unavailable")
+        return sqlite_context
+
+    monkeypatch.setattr("backend.agent.service.retrieve_metadata_context", retrieve)
+
+    candidates, contexts = AgentPreparationService().prepare("统计每个部门分别有多少名员工")
+
+    assert [item.source_id for item in candidates] == ["sqlite_demo"]
+    assert [item.source.source_id for item in contexts] == ["sqlite_demo"]

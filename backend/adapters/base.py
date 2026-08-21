@@ -40,10 +40,9 @@ class BaseDataSourceAdapter(ABC):
     @abstractmethod
     def get_metadata(self) -> Dict[str, Any]:
         """
-        让 LLM 知道数据库里有哪些表、哪些字段、什么类型。
-        LLM 生成 SQL 之前需要"了解"数据库结构，这个方法就是提供这个信息的。
-        返回数据库元数据，格式如下：
-        {
+        获取缓存签名 -> 检查是否有缓存，是否超时，数据是否发生变化 -> 如果没直接返回缓存
+                                                        -> 否则重新构建元数据 -> 写入缓存
+        :return: {
             "tables": [
                 {
                     "name": "employees",
@@ -61,6 +60,8 @@ class BaseDataSourceAdapter(ABC):
             "total_tables": 3
         }
         """
+
+
         pass
 
     @abstractmethod
@@ -84,6 +85,21 @@ class BaseDataSourceAdapter(ABC):
         return self.get_metadata()
 
     def metadata_cache_status(self) -> Dict[str, Any]:
+        """
+        查询缓存状态（metadata_cache_status() 方法）
+        :return:
+            {
+                "data_source": self.name,
+                "supported": True,                           # 该适配器支持缓存
+                "cached": self._metadata_cache is not None,  # 是否有缓存
+                "schema": self.database,                      # 数据库名
+                "schema_signature": "...",                    # 结构签名
+                "cache_age_seconds": 123.456,                 # 缓存已存在 123.456 秒
+                "ttl_seconds": 3600.0,                        # 总有效期 3600 秒
+                "expires_in_seconds": 3476.544,               # 还剩 3476.544 秒过期
+                "total_tables": 15,                           # 缓存中的表数量
+            }
+        """
         """Return a minimal cache status for management endpoints."""
         return {
             "data_source": self.name,
