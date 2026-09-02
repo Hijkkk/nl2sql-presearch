@@ -28,7 +28,7 @@ if TYPE_CHECKING:
 
 
 class PromptBuilder:
-    """项目里唯一的 prompt 工厂。所有 prompt 模板、few-shot、业务规则都集中在这里维护。
+    """项目里唯一的 prompt 工厂务。所有 prompt 模板、few-shot、业规则都集中在这里维护。
 
     设计原则：
       1) 系统提示（"你是 SQL 专家…"）只写一次，所有路径共享
@@ -385,6 +385,7 @@ WHERE alert_content LIKE '%张三%';
 
         relevant_tables: 如果已做表选择，只传入相关表元数据（推荐！减少token）
         """
+        # 转成
         schema_text = self._format_metadata(metadata, relevant_tables)
         catalog_hint = catalog_prompt_hint(
             data_source,
@@ -406,22 +407,7 @@ WHERE alert_content LIKE '%张三%';
 只输出 SQL："""
         return prompt
 
-    # 这部分将原始元数据字典转换为模型易理解的 CREATE TABLE 风格文本
-    # 表名 + 中文注释
-    # 列名、类型、注释（-- 注释）
-    # 外键关系
-    #     因为
-    #     LLM（大语言模型）在训练时见过大量的
-    #     CREATE
-    #     TABLE
-    #     语句，用这种格式喂给它，它能最快、最准确地理解：
-    #     有哪些表
-    #     每张表有哪些字段、什么类型
-    #     表之间的外键关系
-    #     这比直接传
-    #     JSON
-    #     格式效果好得多。
-    # 支持通过 relevant_tables 参数精简只保留相关表，减少 token 消耗
+    # chat链路
     def build_xiyan_prompt(self, question: str, metadata: Dict[str, Any], dialect: str = "SQLite",
                            relevant_tables: List[str] = None, data_source: str = "",
                            controlled_context: "XiYanPromptContext | None" = None) -> str:
@@ -446,18 +432,24 @@ WHERE alert_content LIKE '%张三%';
         与 build_controlled_xiyan_prompt() 的差别：本函数保留中文角色设定和详细 few-shot，
         适合云端大模型（DashScope Qwen）调用；那个是英文精简版，给本地 3B 用。
         """
+
+        # 规范表格式
         schema_text = self._format_metadata(metadata, relevant_tables)
+        # 读取外部目录，目录提示
         catalog_hint = catalog_prompt_hint(
             data_source,
             [table.get("name", "") for table in metadata.get("tables", [])],
         )
+
         evidence_items = [
             "只允许生成 SELECT 或 WITH 查询；不得编造不存在的表或字段；按当前数据源方言生成 SQL；只输出 SQL，不输出解释、思考过程或 Markdown 外文本。",
         ]
+
+        # 读取外部文件 加载别名等等信息。
         if catalog_hint:
             evidence_items.append(catalog_hint)
-        # ↓↓↓ 以下是"数据源专属业务规则"——每加一个新数据源，新增一个 elif 分支
-        # 这些规则在 chat 路径是辅助说明，但在受控 agent 路径是被当作硬约束
+
+        # 不同数据源的不同规则
         if data_source == "hive_hadoop_demo":
             evidence_items.append(
                 "当前 Hadoop/HDFS 演示源由本地 SQLite 执行 CSV 表；日期是 TEXT 类型 YYYY-MM-DD。按月统计必须使用 substr(event_date, 1, 7)，不要使用 TO_DATE、DATE_FORMAT、date_trunc 等 Hive/MySQL/PostgreSQL 函数。"
@@ -518,10 +510,10 @@ WHERE alert_content LIKE '%张三%';
             evidence_items.append(
                 "V_ORDER_SUMMARY 的城市字段是 CUSTOMER_CITY；CUSTOMERS C 基表的字段是 CITY。使用视图时写 CUSTOMER_CITY，使用基表时必须写 C.CITY，绝不能写 C.CUSTOMER_CITY。"
             )
-        # The source profile is also supplied to Agent planning and controlled
-        # XiYan generation.  Keep the detailed Chat-only few-shots above, while
-        # sharing the compact semantic rules across both execution paths.
+
+        # 不同数据库的额外规则语义规则。
         evidence_items.extend(self.get_agent_source_template(data_source)["sql_rules"])
+
         evidence_text = "\n".join(evidence_items)
         controlled_header = ""
         if controlled_context:
@@ -551,6 +543,7 @@ Schema 版本：{controlled_context.schema_signature or '未提供'}
 
 ```sql"""
 
+    # agent链路
     def build_controlled_xiyan_prompt(
         self,
         context: "XiYanPromptContext",
@@ -583,11 +576,8 @@ Schema 版本：{controlled_context.schema_signature or '未提供'}
         # 防止"prompt 拼出来了，但生成时一定爆 OOM"
         self._validate_controlled_budget()
 
-        # With the 6200-token input budget, reuse the Chat-quality metadata:
-        # table summaries, column comments and foreign-key hints for the full
-        # retrieve-stage schema closure.  The plan objects remain an execution
-        # contract below; keeping their join neighbours here lets XiYan choose
-        # the documented relationship rather than inventing one.
+        # 使用 6200 token输入预算，重用聊天质量元数据：
+        # 完整的表摘要、列注释和外键提示
         schema_objects = context.schema_closure_object_ids or context.required_object_ids
         annotated_schema = self._format_metadata(metadata, schema_objects)
         source_profile = self.get_agent_source_template(context.source_id)
